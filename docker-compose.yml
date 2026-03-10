@@ -13,6 +13,26 @@ services:
     volumes:
       - ollama_models:/root/.ollama
 
+  memorymesh:
+    build: .
+    depends_on:
+      - qdrant
+      - ollama
+    ports:
+      - "${HTTP_PORT:-3456}:${HTTP_PORT:-3456}"
+    environment:
+      - TRANSPORT=http
+      - HTTP_PORT=${HTTP_PORT:-3456}
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+      - EMBEDDING_MODEL=nomic-embed-text
+      - QDRANT_COLLECTION=memories
+    volumes:
+      - .:/app
+      - /app/node_modules
+
 volumes:
   qdrant_storage:
   ollama_models:

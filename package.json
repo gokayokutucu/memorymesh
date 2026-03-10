@@ -10,13 +10,14 @@
     "test": "jest --forceExit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "latest",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@qdrant/js-client-rest": "latest",
     "dotenv": "latest",
     "ollama": "latest",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/jest": "latest",
     "@types/node": "latest",
     "jest": "latest",
