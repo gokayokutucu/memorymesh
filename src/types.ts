@@ -1,4 +1,4 @@
-export type MemoryType = "decision" | "learning" | "context" | "preference";
+export type MemoryType = "decision" | "learning" | "context" | "preference" | "output";
 
 export interface IMemoryPayload {
   content: string;
@@ -16,6 +16,7 @@ export interface ISearchResult {
   similarity_score: number;
   created_at: string;
   tags?: string[];
+  full_content?: string;
 }
 
 export interface ISaveMemoryInput {

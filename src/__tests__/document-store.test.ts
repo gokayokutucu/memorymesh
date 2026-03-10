@@ -1,0 +1,78 @@
+const mockCreateIndex = jest.fn();
+const mockUpdateOne = jest.fn();
+const mockFindOne = jest.fn();
+const mockToArray = jest.fn();
+const mockFind = jest.fn();
+const mockCollection = jest.fn();
+const mockDb = jest.fn();
+const mockConnect = jest.fn();
+
+jest.mock("mongodb", () => ({
+  MongoClient: jest.fn().mockImplementation(() => ({
+    connect: mockConnect,
+    db: mockDb,
+  })),
+}));
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockCreateIndex.mockResolvedValue("documents__id");
+  mockUpdateOne.mockResolvedValue(undefined);
+  mockFindOne.mockResolvedValue(null);
+  mockToArray.mockResolvedValue([]);
+  mockFind.mockReturnValue({ toArray: mockToArray });
+  mockCollection.mockReturnValue({
+    createIndex: mockCreateIndex,
+    updateOne: mockUpdateOne,
+    findOne: mockFindOne,
+    find: mockFind,
+  });
+  mockDb.mockReturnValue({ collection: mockCollection });
+  mockConnect.mockResolvedValue(undefined);
+});
+
+describe("document-store", () => {
+  it("saveDocument writes/upserts a document", async () => {
+    const { saveDocument } = await import("../document-store");
+
+    await saveDocument("id-1", "full text", { project: "HumanTick" });
+
+    expect(mockCreateIndex).toHaveBeenCalledWith({ _id: 1 }, { unique: true });
+    expect(mockUpdateOne).toHaveBeenCalledWith(
+      { _id: "id-1" },
+      {
+        $set: expect.objectContaining({
+          content: "full text",
+          metadata: { project: "HumanTick" },
+        }),
+      },
+      { upsert: true }
+    );
+  });
+
+  it("getDocument returns content when document exists", async () => {
+    mockFindOne.mockResolvedValue({ _id: "id-1", content: "stored content" });
+    const { getDocument } = await import("../document-store");
+
+    const content = await getDocument("id-1");
+
+    expect(content).toBe("stored content");
+  });
+
+  it("getDocuments returns a map keyed by id", async () => {
+    mockToArray.mockResolvedValue([
+      { _id: "1", content: "doc-1" },
+      { _id: "2", content: "doc-2" },
+    ]);
+    const { getDocuments } = await import("../document-store");
+
+    const docs = await getDocuments(["1", "2"]);
+
+    expect(mockFind).toHaveBeenCalledWith(
+      { _id: { $in: ["1", "2"] } },
+      { projection: { content: 1 } }
+    );
+    expect(docs.get("1")).toBe("doc-1");
+    expect(docs.get("2")).toBe("doc-2");
+  });
+});

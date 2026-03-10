@@ -32,7 +32,7 @@ function createServer(): McpServer {
         .optional()
         .describe("Project name. Infer from context when possible; use \"general\" if unclear."),
       memory_type: z
-        .enum(["decision", "learning", "context", "preference"])
+        .enum(["decision", "learning", "context", "preference", "output"])
         .describe("Category of the memory"),
       tags: z.array(z.string()).optional().describe(
         "Short topic keywords inferred from conversation context, e.g. ['auth', 'jwt', 'docker']. Infer these yourself — do not ask the user."
@@ -67,7 +67,8 @@ function createServer(): McpServer {
         .map((r, i) => {
           const tagsPart =
             r.tags && r.tags.length > 0 ? ` [${r.tags.join(", ")}]` : "";
-          return `[${i + 1}] (${r.project} / ${r.memory_type} / score: ${r.similarity_score.toFixed(3)})${tagsPart}\n${r.content}`;
+          const outputContent = r.full_content ?? r.content;
+          return `[${i + 1}] (${r.project} / ${r.memory_type} / score: ${r.similarity_score.toFixed(3)})${tagsPart}\n${outputContent}`;
         })
         .join("\n\n");
       return { content: [{ type: "text", text: formatted }] };

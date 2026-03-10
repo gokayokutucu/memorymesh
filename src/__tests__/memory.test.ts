@@ -122,7 +122,7 @@ describe("searchMemory", () => {
       id: string;
       content: string;
       project: string;
-      memory_type: "decision" | "learning" | "context" | "preference";
+      memory_type: "decision" | "learning" | "context" | "preference" | "output";
       tags?: string[];
       created_at: string;
     }> = [];

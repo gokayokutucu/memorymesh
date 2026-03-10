@@ -13,6 +13,7 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@qdrant/js-client-rest": "latest",
     "dotenv": "latest",
+    "mongodb": "^6.21.0",
     "ollama": "latest",
     "zod": "^4.3.6"
   },

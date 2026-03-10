@@ -13,11 +13,21 @@ services:
     volumes:
       - ollama_models:/root/.ollama
 
+  mongodb:
+    image: mongo:7
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=memorymesh
+    volumes:
+      - mongodb_data:/data/db
+
   memorymesh:
     build: .
     depends_on:
       - qdrant
       - ollama
+      - mongodb
     ports:
       - "${HTTP_PORT:-3456}:${HTTP_PORT:-3456}"
     environment:
@@ -29,6 +39,9 @@ services:
       - OLLAMA_PORT=11434
       - EMBEDDING_MODEL=nomic-embed-text
       - QDRANT_COLLECTION=memories
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+      - MONGO_DB=memorymesh
     volumes:
       - .:/app
       - /app/node_modules
@@ -36,3 +49,4 @@ services:
 volumes:
   qdrant_storage:
   ollama_models:
+  mongodb_data:
