@@ -5,6 +5,7 @@ export interface IMemoryPayload {
   project: string;
   memory_type: MemoryType;
   created_at: string;
+  tags?: string[];
 }
 
 export interface ISearchResult {
@@ -14,18 +15,21 @@ export interface ISearchResult {
   memory_type: MemoryType;
   similarity_score: number;
   created_at: string;
+  tags?: string[];
 }
 
 export interface ISaveMemoryInput {
   content: string;
   project: string;
   memory_type: MemoryType;
+  tags?: string[];
 }
 
 export interface ISearchMemoryInput {
   query: string;
   project?: string;
   limit?: number;
+  tags?: string[];
 }
 
 export interface IProjectSummary {

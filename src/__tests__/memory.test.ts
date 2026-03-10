@@ -48,6 +48,20 @@ describe("saveMemory", () => {
     expect(payload.content).toBe("Prefer async/await over callbacks");
     expect(payload.created_at).toBeDefined();
   });
+
+  it("includes tags when provided", async () => {
+    mockSave.mockResolvedValue("tag-id");
+
+    await saveMemory({
+      content: "JWT auth service details",
+      project: "HumanTick",
+      memory_type: "context",
+      tags: ["auth", "jwt"],
+    });
+
+    const payload = mockSave.mock.calls[0][1];
+    expect(payload.tags).toEqual(["auth", "jwt"]);
+  });
 });
 
 describe("searchMemory", () => {
@@ -60,6 +74,7 @@ describe("searchMemory", () => {
         memory_type: "decision",
         similarity_score: 0.95,
         created_at: "2024-01-01T00:00:00.000Z",
+        tags: ["database", "postgres"],
       },
     ]);
 
@@ -79,8 +94,87 @@ describe("searchMemory", () => {
     expect(mockSearch).toHaveBeenCalledWith(
       expect.any(Array),
       "HumanTick",
-      3
+      3,
+      undefined
     );
+  });
+
+  it("passes tags filter to storage", async () => {
+    mockSearch.mockResolvedValue([]);
+
+    await searchMemory({
+      query: "token strategy",
+      project: "HumanTick",
+      limit: 5,
+      tags: ["auth"],
+    });
+
+    expect(mockSearch).toHaveBeenCalledWith(
+      expect.any(Array),
+      "HumanTick",
+      5,
+      ["auth"]
+    );
+  });
+
+  it("filters by tag when searching", async () => {
+    const savedPayloads: Array<{
+      id: string;
+      content: string;
+      project: string;
+      memory_type: "decision" | "learning" | "context" | "preference";
+      tags?: string[];
+      created_at: string;
+    }> = [];
+
+    mockSave.mockImplementation(async (_vector, payload) => {
+      const id = `${savedPayloads.length + 1}`;
+      savedPayloads.push({ id, ...payload });
+      return id;
+    });
+
+    mockSearch.mockImplementation(async (_vector, project, _limit, tags) => {
+      return savedPayloads
+        .filter((item) => (project ? item.project === project : true))
+        .filter((item) =>
+          tags && tags.length > 0
+            ? tags.some((tag) => (item.tags ?? []).includes(tag))
+            : true
+        )
+        .map((item) => ({
+          id: item.id,
+          content: item.content,
+          project: item.project,
+          memory_type: item.memory_type,
+          similarity_score: 0.9,
+          created_at: item.created_at,
+          tags: item.tags,
+        }));
+    });
+
+    await saveMemory({
+      content: "Authentication uses JWT",
+      project: "HumanTick",
+      memory_type: "decision",
+      tags: ["auth", "jwt"],
+    });
+    await saveMemory({
+      content: "Qdrant stores vectors",
+      project: "HumanTick",
+      memory_type: "context",
+      tags: ["storage", "qdrant"],
+    });
+
+    const results = await searchMemory({
+      query: "auth flow",
+      project: "HumanTick",
+      tags: ["auth"],
+      limit: 5,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].content).toContain("Authentication");
+    expect(results[0].tags).toContain("auth");
   });
 
   it("returns empty array when no results", async () => {

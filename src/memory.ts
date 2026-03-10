@@ -21,6 +21,7 @@ export async function saveMemory(input: ISaveMemoryInput): Promise<string> {
     project: input.project,
     memory_type: input.memory_type,
     created_at: new Date().toISOString(),
+    tags: input.tags,
   };
   const id = await savePoint(vector, payload);
   return id;
@@ -31,7 +32,7 @@ export async function searchMemory(
 ): Promise<ISearchResult[]> {
   await ensureCollection();
   const vector = await embed(input.query);
-  return searchPoints(vector, input.project, input.limit ?? 5);
+  return searchPoints(vector, input.project, input.limit ?? 5, input.tags);
 }
 
 export async function getProjects(): Promise<IProjectSummary[]> {

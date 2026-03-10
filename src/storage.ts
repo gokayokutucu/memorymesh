@@ -34,12 +34,17 @@ export async function savePoint(
 export async function searchPoints(
   vector: number[],
   project: string | undefined,
-  limit: number
+  limit: number,
+  tags?: string[]
 ): Promise<ISearchResult[]> {
-  const filter =
-    project
-      ? { must: [{ key: "project", match: { value: project } }] }
-      : undefined;
+  const must: Array<Record<string, unknown>> = [];
+  if (project) {
+    must.push({ key: "project", match: { value: project } });
+  }
+  if (tags && tags.length > 0) {
+    must.push({ key: "tags", match: { any: tags } });
+  }
+  const filter = must.length > 0 ? { must } : undefined;
 
   const results = await client.search(COLLECTION, {
     vector,
@@ -57,6 +62,7 @@ export async function searchPoints(
       memory_type: p.memory_type,
       similarity_score: r.score,
       created_at: p.created_at,
+      tags: p.tags,
     };
   });
 }
