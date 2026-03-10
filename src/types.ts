@@ -1,0 +1,34 @@
+export type MemoryType = "decision" | "learning" | "context" | "preference";
+
+export interface IMemoryPayload {
+  content: string;
+  project: string;
+  memory_type: MemoryType;
+  created_at: string;
+}
+
+export interface ISearchResult {
+  id: string;
+  content: string;
+  project: string;
+  memory_type: MemoryType;
+  similarity_score: number;
+  created_at: string;
+}
+
+export interface ISaveMemoryInput {
+  content: string;
+  project: string;
+  memory_type: MemoryType;
+}
+
+export interface ISearchMemoryInput {
+  query: string;
+  project?: string;
+  limit?: number;
+}
+
+export interface IProjectSummary {
+  project: string;
+  memory_count: number;
+}

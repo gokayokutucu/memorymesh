@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+qdrant_storage/
+ollama_models/
