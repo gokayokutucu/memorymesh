@@ -39,7 +39,7 @@ async function getCollection(): Promise<Collection<IDocumentRecord> | null> {
       database = client.db(MONGO_DB);
     }
     collection = database.collection<IDocumentRecord>(COLLECTION);
-    await collection.createIndex({ _id: 1 }, { unique: true });
+    await collection.createIndex({ _id: 1 });
     return collection;
   } catch (error) {
     warnOnce(error);

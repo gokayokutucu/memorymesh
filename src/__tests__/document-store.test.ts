@@ -37,7 +37,7 @@ describe("document-store", () => {
 
     await saveDocument("id-1", "full text", { project: "HumanTick" });
 
-    expect(mockCreateIndex).toHaveBeenCalledWith({ _id: 1 }, { unique: true });
+    expect(mockCreateIndex).toHaveBeenCalledWith({ _id: 1 });
     expect(mockUpdateOne).toHaveBeenCalledWith(
       { _id: "id-1" },
       {
