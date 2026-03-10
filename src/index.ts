@@ -13,6 +13,12 @@ dotenv.config();
 const TRANSPORT = process.env.TRANSPORT ?? "stdio";
 const BASE_HTTP_PORT = Number(process.env.HTTP_PORT ?? "3456");
 const MAX_PORT_ATTEMPTS = 10;
+const MEMORY_TYPE_DESCRIPTION =
+  "decision=architectural/technical choice made, " +
+  "learning=bug found or lesson learned, " +
+  "context=project background/setup/config, " +
+  "preference=user workflow/style/tool preference, " +
+  "output=code block/email/document/plan produced";
 
 /**
  * Her çağrıda araçlarla donatılmış yeni bir McpServer döner.
@@ -33,7 +39,7 @@ function createServer(): McpServer {
         .describe("Project name. Infer from context when possible; use \"general\" if unclear."),
       memory_type: z
         .enum(["decision", "learning", "context", "preference", "output"])
-        .describe("Category of the memory"),
+        .describe(MEMORY_TYPE_DESCRIPTION),
       tags: z.array(z.string()).optional().describe(
         "Short topic keywords inferred from conversation context, e.g. ['auth', 'jwt', 'docker']. Infer these yourself — do not ask the user."
       ),

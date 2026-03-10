@@ -15,6 +15,7 @@
     "@qdrant/js-client-rest": "latest",
     "dotenv": "latest",
     "mongodb": "^6.21.0",
+    "neo4j-driver": "^5.28.3",
     "ollama": "latest",
     "zod": "^4.3.6"
   },

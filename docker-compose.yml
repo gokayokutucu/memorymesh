@@ -22,12 +22,23 @@ services:
     volumes:
       - mongodb_data:/data/db
 
+  neo4j:
+    image: neo4j:5
+    ports:
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    environment:
+      - NEO4J_AUTH=none
+    volumes:
+      - neo4j_data:/data
+
   memorymesh:
     build: .
     depends_on:
       - qdrant
       - ollama
       - mongodb
+      - neo4j
     ports:
       - "${HTTP_PORT:-3456}:${HTTP_PORT:-3456}"
     environment:
@@ -42,6 +53,7 @@ services:
       - MONGO_HOST=mongodb
       - MONGO_PORT=27017
       - MONGO_DB=memorymesh
+      - NEO4J_URI=bolt://neo4j:7687
     volumes:
       - .:/app
       - /app/node_modules
@@ -50,3 +62,4 @@ volumes:
   qdrant_storage:
   ollama_models:
   mongodb_data:
+  neo4j_data:

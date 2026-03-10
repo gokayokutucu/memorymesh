@@ -1,30 +1,17 @@
 import { embed } from "./embeddings";
-import {
-  ensureCollection,
-  savePoint,
-  searchPoints,
-  listProjects,
-} from "./storage";
+import { ensureCollection, listProjects } from "./storage";
 import {
   ISaveMemoryInput,
   ISearchMemoryInput,
   ISearchResult,
-  IMemoryPayload,
   IProjectSummary,
 } from "./types";
+import { orchestrateSave, orchestrateSearch } from "./orchestrator";
 
 export async function saveMemory(input: ISaveMemoryInput): Promise<string> {
   await ensureCollection();
   const vector = await embed(input.content);
-  const payload: IMemoryPayload = {
-    content: input.content,
-    project: input.project,
-    memory_type: input.memory_type,
-    created_at: new Date().toISOString(),
-    tags: input.tags,
-  };
-  const id = await savePoint(vector, payload);
-  return id;
+  return orchestrateSave(input, vector);
 }
 
 export async function searchMemory(
@@ -32,7 +19,7 @@ export async function searchMemory(
 ): Promise<ISearchResult[]> {
   await ensureCollection();
   const vector = await embed(input.query);
-  return searchPoints(vector, input.project, input.limit ?? 5, input.tags);
+  return orchestrateSearch(vector, input);
 }
 
 export async function getProjects(): Promise<IProjectSummary[]> {

@@ -1,7 +1,6 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { IMemoryPayload, ISearchResult } from "./types";
 import { randomUUID } from "crypto";
-import { getDocuments, saveDocument } from "./document-store";
 
 const QDRANT_HOST = process.env.QDRANT_HOST ?? "localhost";
 const QDRANT_PORT = parseInt(process.env.QDRANT_PORT ?? "6333");
@@ -29,11 +28,6 @@ export async function savePoint(
     wait: true,
     points: [{ id, vector, payload: payload as unknown as Record<string, unknown> }],
   });
-  await saveDocument(id, payload.content, {
-    project: payload.project,
-    memory_type: payload.memory_type,
-    tags: payload.tags ?? [],
-  });
   return id;
 }
 
@@ -59,7 +53,7 @@ export async function searchPoints(
     with_payload: true,
   });
 
-  const enriched = results.map((r) => {
+  return results.map((r) => {
     const p = r.payload as unknown as IMemoryPayload;
     return {
       id: String(r.id),
@@ -71,12 +65,6 @@ export async function searchPoints(
       tags: p.tags,
     };
   });
-
-  const fullDocuments = await getDocuments(enriched.map((item) => item.id));
-  return enriched.map((item) => ({
-    ...item,
-    full_content: fullDocuments.get(item.id),
-  }));
 }
 
 export async function listProjects(): Promise<
