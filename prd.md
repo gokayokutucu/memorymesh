@@ -1,57 +1,57 @@
 # MemoryMesh — Product Requirements Document
-## Faz 1: Local MCP Server
+## Phase 1: Local MCP Server
 
-**Versiyon:** 0.1  
-**Hedef:** Claude Code ve Claude Desktop üzerinde çalışan, tamamen local, `docker compose up` ile ayağa kalkan bir MCP memory server.
+**Version:** 0.1  
+**Goal:** A fully local MCP memory server that runs with Claude Code and Claude Desktop, and can be started with `docker compose up`.
 
 ---
 
 ## Problem
 
-Claude.ai ve Claude Code, session'lar arasında teknik proje context'ini hatırlamıyor. Kullanıcı her yeni conversation'da codebase bilgisini, mimari kararları ve geçmiş session öğrenmelerini manuel olarak paste etmek zorunda kalıyor. Bu hem zaman kaybı hem de context window israfı.
+Claude.ai and Claude Code do not remember technical project context across sessions. In each new conversation, users must manually paste codebase details, architecture decisions, and lessons from previous sessions. This causes both time loss and context window waste.
 
 ---
 
-## Çözüm
+## Solution
 
-MemoryMesh, Claude'un MCP tool olarak bağlandığı bir local memory server'dır. Claude konuşma sırasında kendi inisiyatifiyle:
+MemoryMesh is a local memory server that Claude connects to as an MCP tool. During conversations, Claude can proactively:
 
-- Önemli gördüğü bilgileri MemoryMesh'e yazar
-- Bilmediği veya eksik hissettiği durumlarda MemoryMesh'e sorar
-- Her şeyi project bazlı organize eder (örn. "HumanTick" projesi)
+- Write important information to MemoryMesh
+- Query MemoryMesh when it is uncertain or missing context
+- Organize everything by project namespace (e.g., the "HumanTick" project)
 
 ---
 
-## Faz 1 Kapsamı
+## Phase 1 Scope
 
-### Kapsam İÇİ
+### In Scope
 - Local MCP server (stdio transport)
-- Claude Code ve Claude Desktop entegrasyonu
+- Claude Code and Claude Desktop integration
 - Qdrant vector DB (Docker)
-- Ollama embedding (nomic-embed-text modeli)
-- Project bazlı memory namespace'i
-- `docker compose up` ile tek komut kurulum
+- Ollama embeddings (nomic-embed-text model)
+- Project-based memory namespace
+- One-command setup with `docker compose up`
 
-### Kapsam DIŞI (Faz 2)
+### Out of Scope (Phase 2)
 - Claude.ai web connector (public HTTPS endpoint)
-- Cloudflare Tunnel entegrasyonu
-- Codebase otomatik ingestion / file watcher
-- Multi-user desteği
+- Cloudflare Tunnel integration
+- Automatic codebase ingestion / file watcher
+- Multi-user support
 - UI dashboard
 
 ---
 
-## Teknik Mimari
+## Technical Architecture
 
 ```
 Claude Code / Claude Desktop
 └── MCP (stdio transport)
     └── MemoryMesh MCP Server (TypeScript, MCP SDK)
-        ├── Ollama API → nomic-embed-text (embedding)
+        ├── Ollama API -> nomic-embed-text (embeddings)
         └── Qdrant (vector storage, Docker container)
 ```
 
-### Docker Compose Servisleri
+### Docker Compose Services
 
 ```yaml
 services:
@@ -78,65 +78,65 @@ services:
 
 ---
 
-## MCP Tool Tanımları
+## MCP Tool Definitions
 
-MemoryMesh 3 tool expose eder:
+MemoryMesh exposes 3 tools:
 
 ### 1. `save_memory`
 ```
-Açıklama: Önemli bir bilgiyi, kararı veya öğrenmeyi hafızaya kaydet.
-Parametreler:
-  - content (string): Kaydedilecek bilgi
-  - project (string): Proje adı (örn. "HumanTick")
+Description: Save important information, decisions, or learnings to memory.
+Parameters:
+  - content (string): Information to save
+  - project (string): Project name (e.g., "HumanTick")
   - memory_type (enum): "decision" | "learning" | "context" | "preference"
-Döndürür: memory_id
+Returns: memory_id
 ```
 
 ### 2. `search_memory`
 ```
-Açıklama: Hafızada alakalı bilgi ara.
-Parametreler:
-  - query (string): Arama sorgusu
-  - project (string): Proje adı (boş bırakılırsa tüm projeler)
-  - limit (int): Maksimum sonuç sayısı (default: 5)
-Döndürür: [{content, project, memory_type, similarity_score, created_at}]
+Description: Search relevant information in memory.
+Parameters:
+  - query (string): Search query
+  - project (string): Project name (if empty, search all projects)
+  - limit (int): Maximum result count (default: 5)
+Returns: [{content, project, memory_type, similarity_score, created_at}]
 ```
 
 ### 3. `list_projects`
 ```
-Açıklama: Hafızada kayıtlı projeleri listele.
-Parametreler: yok
-Döndürür: [{project, memory_count, last_updated}]
+Description: List projects stored in memory.
+Parameters: none
+Returns: [{project, memory_count, last_updated}]
 ```
 
 ---
 
-## Claude İçin System Prompt (Project Instructions)
+## System Prompt for Claude (Project Instructions)
 
-Kullanıcı Claude'un Project Instructions'ına şunu ekleyecek:
+Users will add this to Claude Project Instructions:
 
 ```
-Sen MemoryMesh adlı bir hafıza sistemine erişimin var.
+You have access to a memory system called MemoryMesh.
 
-YAZMA KURALI:
-Konuşma sırasında aşağıdaki türde bilgilerle karşılaşırsan save_memory tool'unu kullan:
-- Mimari kararlar ("X yerine Y kullanmaya karar verdik çünkü...")
-- Öğrenilen şeyler ("Bu bug şundan kaynaklanıyordu...")
-- Proje context'i ("HumanTick'in authentication sistemi şöyle çalışıyor...")
-- Kullanıcı tercihleri ("Bu projede TypeScript strict mode kullanılıyor")
+WRITE RULE:
+Use the save_memory tool when you encounter information such as:
+- Architecture decisions ("We decided to use Y instead of X because...")
+- Learnings ("This bug was caused by...")
+- Project context ("HumanTick's authentication system works like this...")
+- User preferences ("This project uses TypeScript strict mode")
 
-OKUMA KURALI:
-Aşağıdaki durumlarda search_memory tool'unu kullan:
-- Bir konuda bilgin eksik veya belirsiz hissediyorsan
-- Kullanıcı daha önce konuşulmuş bir şeye atıfta bulunuyorsa
-- Proje hakkında sana söylenmeyen ama hafızada olabilecek bir bilgiye ihtiyaç duyuyorsan
+READ RULE:
+Use the search_memory tool in these cases:
+- When your knowledge feels incomplete or uncertain about a topic
+- When the user refers to something discussed before
+- When you need project information that may exist in memory but was not mentioned in the current conversation
 
-Hangi bilginin önemli olduğuna sen karar ver. Her şeyi kaydetme, sadece gelecekte işe yarayacak olanları kaydet.
+You decide what is important. Do not save everything; only save information that is likely to be useful in the future.
 ```
 
 ---
 
-## Dosya Yapısı
+## File Structure
 
 ```
 memorymesh/
@@ -146,7 +146,7 @@ memorymesh/
 ├── tsconfig.json
 ├── README.md
 └── src/
-    ├── index.ts           # MCP server entry point, tool tanımları
+    ├── index.ts           # MCP server entry point, tool definitions
     ├── memory.ts          # save/search logic
     ├── embeddings.ts      # Ollama embedding client
     └── storage.ts         # Qdrant client wrapper
@@ -154,68 +154,68 @@ memorymesh/
 
 ---
 
-## Claude Code Kurulum Adımları (README)
+## Claude Code Setup Steps (README)
 
 ```bash
-# 1. Repo'yu clone et
+# 1. Clone repository
 git clone https://github.com/yourname/memorymesh
 cd memorymesh
 
-# 2. Bağımlılıkları yükle
+# 2. Install dependencies
 npm install
 
-# 3. Build et
+# 3. Build
 npm run build
 
-# 4. Servisleri başlat
+# 4. Start services
 docker compose up -d
 
-# 5. Ollama modeli indir (ilk kurulumda bir kez)
+# 5. Pull Ollama model (once on first setup)
 docker exec memorymesh-ollama-1 ollama pull nomic-embed-text
 
-# 6. Claude Code'a ekle
+# 6. Add to Claude Code
 claude mcp add memorymesh -- node dist/index.js
 ```
 
 ---
 
-## Veri Modeli (Qdrant Collection)
+## Data Model (Qdrant Collection)
 
 ```
 Collection: "memories"
 
-Her memory point:
+Each memory point:
   vector: float[] (768 dim, nomic-embed-text)
   payload:
     - content: string
     - project: string
     - memory_type: string
     - created_at: ISO8601 timestamp
-    - conversation_id: string (opsiyonel)
+    - conversation_id: string (optional)
 ```
 
 ---
 
-## Başarı Kriterleri (Faz 1)
+## Success Criteria (Phase 1)
 
-1. `docker compose up` ile servisler hatasız ayağa kalkıyor
-2. Claude Code, `save_memory` tool'unu görebiliyor ve çağırabiliyor
-3. Kaydedilen bir memory, `search_memory` ile semantic olarak bulunabiliyor
-4. "HumanTick" ve "ProjeX" gibi farklı projeler birbirinden izole çalışıyor
-5. Qdrant volume ile memory'ler container restart'tan sonra kaybolmuyor
+1. Services start successfully with `docker compose up`
+2. Claude Code can discover and call the `save_memory` tool
+3. A saved memory can be found semantically via `search_memory`
+4. Different projects such as "HumanTick" and "ProjectX" are isolated
+5. Memories persist after container restart via Qdrant volume
 
 ---
 
-## Faz 2 Planı (Kapsam Dışı Ama Bilinmeli)
+## Phase 2 Plan (Out of Scope but should be known)
 
-- `docker compose up` içine Cloudflare Tunnel entegrasyonu
-- Oluşan public URL'i kullanıcıya otomatik göster
-- Claude.ai web → Settings → Connectors → URL yapıştır
+- Cloudflare Tunnel integration into `docker compose up`
+- Automatically show generated public URL to the user
+- Claude.ai web -> Settings -> Connectors -> paste URL
 - Codebase ingestion: file watcher + incremental indexing
 
 ---
 
-## Bağımlılıklar
+## Dependencies
 
 ```json
 {
@@ -233,10 +233,10 @@ Her memory point:
 
 ---
 
-## Notlar
+## Notes
 
-- Ollama'nın ilk model pull'u internet bağlantısı gerektiriyor (~270MB)
-- Qdrant storage varsayılan olarak `./qdrant_storage` volume'unda tutuluyor
-- MCP transport Faz 1'de stdio, Faz 2'de HTTP'ye geçecek
-- OpenAI API key gerektirmiyor, tamamen local çalışıyor
-- MCP server `node dist/index.js` ile çalışıyor, Qdrant ve Ollama ayrı Docker container'larında
+- First Ollama model pull requires internet connection (~270MB)
+- Qdrant storage is kept in `./qdrant_storage` volume by default
+- MCP transport is stdio in Phase 1 and planned to move to HTTP in Phase 2
+- No OpenAI API key is required; it runs fully local
+- MCP server runs with `node dist/index.js`, while Qdrant and Ollama run in separate Docker containers

@@ -50,8 +50,10 @@ Formatting rules:
 ## 4) Testing Rules
 
 - Before starting any development work:
+  - Run `docker compose build` to ensure image is up to date
   - Run `npm test` to verify baseline is green
 - After each commit-worthy sub-step:
+  - Run `docker compose build`
   - Run `npm test`
 - All new tools and functions MUST have unit tests.
 - Test file convention: `src/__tests__/<module>.test.ts`
@@ -134,6 +136,7 @@ STRICT GUARDS (must follow, otherwise STOP and report):
 
 3. Build gating — if `src/` is changed:
    ```bash
+   docker compose build
    npm run build
    npm test
    ```
