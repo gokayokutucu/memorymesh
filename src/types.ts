@@ -36,6 +36,11 @@ export interface ISaveMemoryInput {
   source_type?: SourceType;
 }
 
+export interface ISaveMemoryResult {
+  id: string;
+  status: "pending" | "saved";
+}
+
 export interface ISearchMemoryInput {
   query: string;
   project?: string;

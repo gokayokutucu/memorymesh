@@ -75,7 +75,7 @@ async function run(): Promise<void> {
     "Prefer TypeScript over Python for all backend projects";
 
   console.log("1) Saving context memory...");
-  await saveMemory({
+  saveMemory({
     content: contextContent,
     project: "MemoryMesh",
     memory_type: "context",
@@ -84,7 +84,7 @@ async function run(): Promise<void> {
   pass("Saved context memory (Qdrant + Neo4j route)");
 
   console.log("2) Saving output memory...");
-  await saveMemory({
+  saveMemory({
     content: outputContent,
     project: "MemoryMesh",
     memory_type: "output",
@@ -93,13 +93,17 @@ async function run(): Promise<void> {
   pass("Saved output memory (Qdrant + MongoDB + Neo4j route)");
 
   console.log("3) Saving preference memory...");
-  await saveMemory({
+  saveMemory({
     content: preferenceContent,
     project: "MemoryMesh",
     memory_type: "preference",
     tags: ["preference", "typescript"],
   });
   pass("Saved preference memory (Qdrant-only route)");
+
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 2500);
+  });
 
   console.log("4) Searching output memory...");
   const outputResults = await searchMemory({

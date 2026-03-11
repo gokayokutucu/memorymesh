@@ -65,7 +65,7 @@ function createServer(): McpServer {
         ),
     },
     async ({ content, project, memory_type, tags, title, ref_id, source_type }) => {
-      const id = await saveMemory({
+      const result = saveMemory({
         content,
         project: project ?? "general",
         memory_type,
@@ -74,7 +74,11 @@ function createServer(): McpServer {
         ref_id,
         source_type,
       });
-      return { content: [{ type: "text", text: `Memory saved with id: ${id}` }] };
+      return {
+        content: [
+          { type: "text", text: `Saved with id: ${result.id} (indexing in background)` },
+        ],
+      };
     }
   );
 

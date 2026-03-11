@@ -7,7 +7,8 @@ import { ISaveMemoryInput, ISearchMemoryInput, ISearchResult } from "./types";
 export async function orchestrateSave(
   input: ISaveMemoryInput,
   vector: number[],
-  profiler?: Profiler
+  profiler?: Profiler,
+  preGeneratedId?: string
 ): Promise<string> {
   const payload = {
     content: input.content,
@@ -20,14 +21,15 @@ export async function orchestrateSave(
     source_type: input.source_type,
   };
 
-  const saveQdrant = async (): Promise<string> => savePoint(vector, payload);
-  const id = profiler
+  const saveQdrant = async (): Promise<string> =>
+    savePoint(vector, payload, preGeneratedId);
+  const savedId = profiler
     ? await profiler.time("qdrant_save", saveQdrant)
     : await saveQdrant();
 
   if (input.memory_type === "output") {
     const saveMongo = async (): Promise<void> =>
-      saveDocument(id, input.content, {
+      saveDocument(savedId, input.content, {
       project: input.project,
       memory_type: input.memory_type,
       tags: input.tags ?? [],
@@ -45,7 +47,7 @@ export async function orchestrateSave(
   if (input.memory_type !== "preference") {
     const saveGraph = async (): Promise<void> =>
       saveNode(
-        id,
+        savedId,
         input.memory_type,
         input.project,
         input.tags ?? [],
@@ -59,7 +61,7 @@ export async function orchestrateSave(
     }
   }
 
-  return id;
+  return savedId;
 }
 
 export async function orchestrateSearch(

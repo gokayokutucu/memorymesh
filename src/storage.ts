@@ -21,14 +21,15 @@ export async function ensureCollection(): Promise<void> {
 
 export async function savePoint(
   vector: number[],
-  payload: IMemoryPayload
+  payload: IMemoryPayload,
+  id?: string
 ): Promise<string> {
-  const id = randomUUID();
+  const pointId = id ?? randomUUID();
   await client.upsert(COLLECTION, {
     wait: true,
-    points: [{ id, vector, payload: payload as unknown as Record<string, unknown> }],
+    points: [{ id: pointId, vector, payload: payload as unknown as Record<string, unknown> }],
   });
-  return id;
+  return pointId;
 }
 
 export async function searchPoints(

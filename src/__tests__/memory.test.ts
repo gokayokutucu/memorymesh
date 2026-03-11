@@ -17,6 +17,21 @@ const mockQueryByTags = graphStore.queryByTags as jest.MockedFunction<typeof gra
 const mockQueryByDateRange = graphStore.queryByDateRange as jest.MockedFunction<typeof graphStore.queryByDateRange>;
 const mockQueryRelated = graphStore.queryRelated as jest.MockedFunction<typeof graphStore.queryRelated>;
 
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 500
+): Promise<void> {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockEmbed.mockResolvedValue(new Array(768).fill(0.1));
@@ -28,47 +43,62 @@ beforeEach(() => {
 });
 
 describe("saveMemory", () => {
-  it("embeds content and saves to storage, returns an id", async () => {
-    mockSave.mockResolvedValue("test-id-123");
-
-    const id = await saveMemory({
+  it("returns pending status with a valid UUID", () => {
+    const result = saveMemory({
       content: "We use Postgres for the main database",
       project: "HumanTick",
       memory_type: "decision",
     });
 
-    expect(mockEmbed).toHaveBeenCalledWith("We use Postgres for the main database");
-    expect(mockSave).toHaveBeenCalledTimes(1);
-    expect(id).toBe("test-id-123");
+    expect(result.status).toBe("pending");
+    expect(result.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
   });
 
-  it("includes correct payload fields when saving", async () => {
+  it("background save eventually completes", async () => {
     mockSave.mockResolvedValue("abc");
 
-    await saveMemory({
+    saveMemory({
       content: "Prefer async/await over callbacks",
       project: "HumanTick",
       memory_type: "preference",
     });
 
+    await waitForCondition(() => mockSave.mock.calls.length === 1);
+    expect(mockEmbed).toHaveBeenCalledWith("Prefer async/await over callbacks");
+  });
+
+  it("includes correct payload fields when saving", async () => {
+    mockSave.mockResolvedValue("abc");
+    const result = saveMemory({
+      content: "Prefer async/await over callbacks",
+      project: "HumanTick",
+      memory_type: "preference",
+    });
+
+    await waitForCondition(() => mockSave.mock.calls.length === 1);
     const callArgs = mockSave.mock.calls[0];
     const payload = callArgs[1];
+    const pointId = callArgs[2];
     expect(payload.project).toBe("HumanTick");
     expect(payload.memory_type).toBe("preference");
     expect(payload.content).toBe("Prefer async/await over callbacks");
     expect(payload.created_at).toBeDefined();
+    expect(pointId).toBe(result.id);
   });
 
   it("includes tags when provided", async () => {
     mockSave.mockResolvedValue("tag-id");
 
-    await saveMemory({
+    saveMemory({
       content: "JWT auth service details",
       project: "HumanTick",
       memory_type: "context",
       tags: ["auth", "jwt"],
     });
 
+    await waitForCondition(() => mockSave.mock.calls.length === 1);
     const payload = mockSave.mock.calls[0][1];
     expect(payload.tags).toEqual(["auth", "jwt"]);
   });
@@ -167,18 +197,19 @@ describe("searchMemory", () => {
         }));
     });
 
-    await saveMemory({
+    saveMemory({
       content: "Authentication uses JWT",
       project: "HumanTick",
       memory_type: "decision",
       tags: ["auth", "jwt"],
     });
-    await saveMemory({
+    saveMemory({
       content: "Qdrant stores vectors",
       project: "HumanTick",
       memory_type: "context",
       tags: ["storage", "qdrant"],
     });
+    await waitForCondition(() => savedPayloads.length === 2);
 
     const results = await searchMemory({
       query: "auth flow",

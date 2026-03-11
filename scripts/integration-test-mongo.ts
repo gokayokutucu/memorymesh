@@ -52,13 +52,17 @@ async function run(): Promise<void> {
   ].join("\n");
 
   console.log("1) Saving output memory...");
-  const id = await saveMemory({
+  const saveResult = saveMemory({
     content: longOutput,
     project: "HumanTick",
     memory_type: "output",
     tags: ["report", "code", "typescript", "analytics"],
   });
-  console.log(`   Saved with id: ${id}\n`);
+  console.log(`   Saved with id: ${saveResult.id} (${saveResult.status})\n`);
+
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 2000);
+  });
 
   console.log("2) Searching for related output...");
   const results = await searchMemory({

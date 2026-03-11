@@ -8,21 +8,25 @@ async function run() {
 
   // 1. Save a memory
   console.log("1. Saving memory...");
-  const id = await saveMemory({
+  const saveResult = saveMemory({
     content: "HumanTick uses a microservices architecture with an API Gateway pattern. Each service communicates via REST.",
     project: "HumanTick",
     memory_type: "context",
   });
-  console.log(`   Saved with id: ${id}\n`);
+  console.log(`   Saved with id: ${saveResult.id} (${saveResult.status})\n`);
 
   // 2. Save a second memory
   console.log("2. Saving second memory...");
-  const id2 = await saveMemory({
+  const saveResult2 = saveMemory({
     content: "Authentication in HumanTick is handled by a dedicated auth service using JWT tokens.",
     project: "HumanTick",
     memory_type: "decision",
   });
-  console.log(`   Saved with id: ${id2}\n`);
+  console.log(`   Saved with id: ${saveResult2.id} (${saveResult2.status})\n`);
+
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 2000);
+  });
 
   // 3. Search for related content
   console.log("3. Searching for 'authentication'...");
