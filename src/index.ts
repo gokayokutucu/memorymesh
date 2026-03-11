@@ -30,9 +30,11 @@ function createServer(): McpServer {
 
   server.tool(
     "save_memory",
-    "Save an important memory, decision, or learning to persistent storage. Infer project from conversation context (repo name, app name, topic) and default to \"general\" if unclear. Infer tags as 3-6 short lowercase keywords from the conversation.",
+    "Save important context to persistent memory. ROUTING RULES: if the response contains a code block, email, document or plan -> use memory_type='output' and set content to the FULL text (stored in MongoDB for exact retrieval). For all other types -> set content to a concise [INPUT]/[OUTPUT] summary (stored in Qdrant for semantic search). Always infer project and tags from conversation.",
     {
-      content: z.string().describe("The information to remember"),
+      content: z.string().describe(
+        "For memory_type='output': paste the FULL code block, email, or document exactly as produced. For all other types: write a concise [INPUT] summary / [OUTPUT] summary."
+      ),
       project: z
         .string()
         .optional()
