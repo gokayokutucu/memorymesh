@@ -48,15 +48,21 @@ function createServer(): McpServer {
       title: z
         .string()
         .optional()
-        .describe("Human-readable memory title, e.g. 'Task: API bootstrap' or 'MM-012'"),
+        .describe(
+          "Human-readable title. Use task name if present e.g. 'Task: Creating API', or a prompt ID like 'MM-012'."
+        ),
       ref_id: z
         .string()
         .optional()
-        .describe("Explicit identifier for exact retrieval, e.g. 'MM-012' or 'TASK-001'"),
+        .describe(
+          "Explicit reference ID for exact lookup e.g. 'MM-012', 'TASK-001'. Set whenever a prompt ID or task ID is visible in the conversation."
+        ),
       source_type: z
         .enum(["code_block", "email", "document", "plan", "summary"])
         .optional()
-        .describe("Source content type"),
+        .describe(
+          "code_block=any code, email=email draft, document=doc/report, plan=step-by-step plan, summary=general summary."
+        ),
     },
     async ({ content, project, memory_type, tags, title, ref_id, source_type }) => {
       const id = await saveMemory({
@@ -89,11 +95,29 @@ function createServer(): McpServer {
         .optional()
         .describe("Filter by exact title"),
       source_type: z
-        .enum(["code_block", "email", "document", "plan", "summary"])
+        .string()
         .optional()
         .describe("Filter by source type"),
+      sort_by: z
+        .enum(["relevance", "recency", "oldest"])
+        .optional()
+        .describe(
+          "relevance=default vector score, recency=newest first, oldest=oldest first. Use 'oldest' for 'first time we discussed X', 'recency' for 'latest'."
+        ),
+      before: z
+        .string()
+        .optional()
+        .describe(
+          "ISO datetime — return memories created before this time e.g. '2026-03-08T00:00:00Z'"
+        ),
+      after: z
+        .string()
+        .optional()
+        .describe(
+          "ISO datetime — return memories created after this time e.g. '2026-03-07T00:00:00Z'"
+        ),
     },
-    async ({ query, project, limit, tags, ref_id, title, source_type }) => {
+    async ({ query, project, limit, tags, ref_id, title, source_type, sort_by, before, after }) => {
       const results = await searchMemory({
         query,
         project,
@@ -102,6 +126,9 @@ function createServer(): McpServer {
         ref_id,
         title,
         source_type,
+        sort_by,
+        before,
+        after,
       });
       if (results.length === 0) {
         return { content: [{ type: "text", text: "No relevant memories found." }] };
@@ -112,13 +139,12 @@ function createServer(): McpServer {
             r.tags && r.tags.length > 0 ? ` [${r.tags.join(", ")}]` : "";
           const outputContent = r.full_content ?? r.content;
           const metadataParts = [
-            r.ref_id ? `ref_id: ${r.ref_id}` : "",
-            r.title ? `title: ${r.title}` : "",
-            r.source_type ? `source_type: ${r.source_type}` : "",
+            r.ref_id ? `ref: ${r.ref_id}` : "",
+            r.title ?? "",
           ].filter((item) => item.length > 0);
-          const metadataLine =
-            metadataParts.length > 0 ? `\n${metadataParts.join(" | ")}` : "";
-          return `[${i + 1}] (${r.project} / ${r.memory_type} / score: ${r.similarity_score.toFixed(3)})${tagsPart}${metadataLine}\n${outputContent}`;
+          const metadataPart =
+            metadataParts.length > 0 ? ` | ${metadataParts.join(" | ")}` : "";
+          return `[${i + 1}] (${r.project} / ${r.memory_type} / score: ${r.similarity_score.toFixed(3)})${tagsPart}${metadataPart}\n${outputContent}`;
         })
         .join("\n\n");
       return { content: [{ type: "text", text: formatted }] };

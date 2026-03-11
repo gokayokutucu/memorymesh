@@ -93,12 +93,11 @@ describe("searchMemory", () => {
 
     expect(mockSearch).toHaveBeenCalledWith(
       expect.any(Array),
-      "HumanTick",
-      3,
-      undefined,
-      undefined,
-      undefined,
-      undefined
+      expect.objectContaining({
+        query: "auth",
+        project: "HumanTick",
+        limit: 3,
+      })
     );
   });
 
@@ -114,12 +113,12 @@ describe("searchMemory", () => {
 
     expect(mockSearch).toHaveBeenCalledWith(
       expect.any(Array),
-      "HumanTick",
-      5,
-      ["auth"],
-      undefined,
-      undefined,
-      undefined
+      expect.objectContaining({
+        query: "token strategy",
+        project: "HumanTick",
+        limit: 5,
+        tags: ["auth"],
+      })
     );
   });
 
@@ -139,12 +138,12 @@ describe("searchMemory", () => {
       return id;
     });
 
-    mockSearch.mockImplementation(async (_vector, project, _limit, tags) => {
+    mockSearch.mockImplementation(async (_vector, input) => {
       return savedPayloads
-        .filter((item) => (project ? item.project === project : true))
+        .filter((item) => (input.project ? item.project === input.project : true))
         .filter((item) =>
-          tags && tags.length > 0
-            ? tags.some((tag) => (item.tags ?? []).includes(tag))
+          input.tags && input.tags.length > 0
+            ? input.tags.some((tag) => (item.tags ?? []).includes(tag))
             : true
         )
         .map((item) => ({
@@ -197,13 +196,92 @@ describe("searchMemory", () => {
     expect(mockEmbed).not.toHaveBeenCalled();
     expect(mockSearch).toHaveBeenCalledWith(
       [],
-      undefined,
-      1,
-      undefined,
-      "MM-011",
-      undefined,
-      undefined
+      expect.objectContaining({
+        query: "ignored",
+        ref_id: "MM-011",
+        limit: 1,
+      })
     );
+  });
+
+  it("exact ref_id lookup returns the matching memory", async () => {
+    const expected = {
+      id: "ref-1",
+      content: "Prompt details",
+      project: "MemoryMesh",
+      memory_type: "context" as const,
+      similarity_score: 1,
+      created_at: "2026-03-10T10:00:00.000Z",
+      ref_id: "TEST-001",
+    };
+    mockSearch.mockResolvedValue([expected]);
+
+    const results = await searchMemory({ query: "TEST-001", ref_id: "TEST-001", limit: 1 });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].ref_id).toBe("TEST-001");
+  });
+
+  it("passes sort_by oldest and keeps older memory first", async () => {
+    mockSearch.mockResolvedValue([
+      {
+        id: "old",
+        content: "Older",
+        project: "MemoryMesh",
+        memory_type: "context",
+        similarity_score: 0.7,
+        created_at: "2026-03-01T10:00:00.000Z",
+      },
+      {
+        id: "new",
+        content: "Newer",
+        project: "MemoryMesh",
+        memory_type: "context",
+        similarity_score: 0.8,
+        created_at: "2026-03-10T10:00:00.000Z",
+      },
+    ]);
+
+    const results = await searchMemory({
+      query: "timeline",
+      sort_by: "oldest",
+      limit: 2,
+    });
+
+    expect(mockSearch).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ sort_by: "oldest", limit: 2 })
+    );
+    expect(results[0].id).toBe("old");
+  });
+
+  it("passes before/after filters and returns matching memory", async () => {
+    mockSearch.mockResolvedValue([
+      {
+        id: "mid",
+        content: "In-range",
+        project: "MemoryMesh",
+        memory_type: "learning",
+        similarity_score: 0.92,
+        created_at: "2026-03-08T12:00:00.000Z",
+      },
+    ]);
+
+    const results = await searchMemory({
+      query: "recent incidents",
+      after: "2026-03-07T00:00:00Z",
+      before: "2026-03-09T00:00:00Z",
+    });
+
+    expect(mockSearch).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({
+        after: "2026-03-07T00:00:00Z",
+        before: "2026-03-09T00:00:00Z",
+      })
+    );
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe("mid");
   });
 });
 

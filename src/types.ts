@@ -44,6 +44,9 @@ export interface ISearchMemoryInput {
   ref_id?: string;
   title?: string;
   source_type?: string;
+  sort_by?: "relevance" | "recency" | "oldest";
+  before?: string;
+  after?: string;
 }
 
 export interface IProjectSummary {

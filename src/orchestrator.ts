@@ -49,15 +49,7 @@ export async function orchestrateSearch(
   vector: number[],
   input: ISearchMemoryInput
 ): Promise<ISearchResult[]> {
-  const qdrantResults = await searchPoints(
-    vector,
-    input.project,
-    input.limit ?? 5,
-    input.tags,
-    input.ref_id,
-    input.title,
-    input.source_type
-  );
+  const qdrantResults = await searchPoints(vector, input);
 
   const ids = qdrantResults.map((result) => result.id);
   const docs = await getDocuments(ids);

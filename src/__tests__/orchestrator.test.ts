@@ -121,12 +121,12 @@ describe("orchestrateSearch", () => {
 
     expect(mockSearchPoints).toHaveBeenCalledWith(
       expect.any(Array),
-      "HumanTick",
-      3,
-      ["report"],
-      undefined,
-      undefined,
-      undefined
+      expect.objectContaining({
+        query: "report",
+        project: "HumanTick",
+        tags: ["report"],
+        limit: 3,
+      })
     );
     expect(results[0].full_content).toBe("full output text");
   });
@@ -144,12 +144,13 @@ describe("orchestrateSearch", () => {
 
     expect(mockSearchPoints).toHaveBeenCalledWith(
       expect.any(Array),
-      undefined,
-      1,
-      undefined,
-      "MM-012",
-      "Task Plan",
-      "document"
+      expect.objectContaining({
+        query: "MM-012",
+        ref_id: "MM-012",
+        title: "Task Plan",
+        source_type: "document",
+        limit: 1,
+      })
     );
   });
 });
