@@ -95,6 +95,9 @@ describe("searchMemory", () => {
       expect.any(Array),
       "HumanTick",
       3,
+      undefined,
+      undefined,
+      undefined,
       undefined
     );
   });
@@ -113,7 +116,10 @@ describe("searchMemory", () => {
       expect.any(Array),
       "HumanTick",
       5,
-      ["auth"]
+      ["auth"],
+      undefined,
+      undefined,
+      undefined
     );
   });
 
@@ -181,6 +187,23 @@ describe("searchMemory", () => {
     mockSearch.mockResolvedValue([]);
     const results = await searchMemory({ query: "something unknown" });
     expect(results).toHaveLength(0);
+  });
+
+  it("bypasses embeddings for exact ref_id lookup", async () => {
+    mockSearch.mockResolvedValue([]);
+
+    await searchMemory({ query: "ignored", ref_id: "MM-011", limit: 1 });
+
+    expect(mockEmbed).not.toHaveBeenCalled();
+    expect(mockSearch).toHaveBeenCalledWith(
+      [],
+      undefined,
+      1,
+      undefined,
+      "MM-011",
+      undefined,
+      undefined
+    );
   });
 });
 

@@ -1,4 +1,5 @@
 export type MemoryType = "decision" | "learning" | "context" | "preference" | "output";
+export type SourceType = "code_block" | "email" | "document" | "plan" | "summary";
 
 export interface IMemoryPayload {
   content: string;
@@ -6,6 +7,9 @@ export interface IMemoryPayload {
   memory_type: MemoryType;
   created_at: string;
   tags?: string[];
+  title?: string;
+  ref_id?: string;
+  source_type?: SourceType;
 }
 
 export interface ISearchResult {
@@ -17,6 +21,9 @@ export interface ISearchResult {
   created_at: string;
   tags?: string[];
   full_content?: string;
+  title?: string;
+  ref_id?: string;
+  source_type?: SourceType;
 }
 
 export interface ISaveMemoryInput {
@@ -24,6 +31,9 @@ export interface ISaveMemoryInput {
   project: string;
   memory_type: MemoryType;
   tags?: string[];
+  title?: string;
+  ref_id?: string;
+  source_type?: SourceType;
 }
 
 export interface ISearchMemoryInput {
@@ -31,6 +41,9 @@ export interface ISearchMemoryInput {
   project?: string;
   limit?: number;
   tags?: string[];
+  ref_id?: string;
+  title?: string;
+  source_type?: string;
 }
 
 export interface IProjectSummary {

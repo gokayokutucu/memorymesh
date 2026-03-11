@@ -37,7 +37,9 @@ describe("orchestrateSave", () => {
       "memory-id",
       "decision",
       "HumanTick",
-      ["cache", "redis"]
+      ["cache", "redis"],
+      undefined,
+      undefined
     );
     expect(mockSaveDocument).not.toHaveBeenCalled();
   });
@@ -49,13 +51,34 @@ describe("orchestrateSave", () => {
         project: "HumanTick",
         memory_type: "output",
         tags: ["output", "report"],
+        title: "MM-012",
+        ref_id: "MM-012",
+        source_type: "document",
       },
       new Array(768).fill(0.1)
     );
 
     expect(mockSavePoint).toHaveBeenCalledTimes(1);
-    expect(mockSaveDocument).toHaveBeenCalledTimes(1);
-    expect(mockSaveNode).toHaveBeenCalledTimes(1);
+    expect(mockSaveDocument).toHaveBeenCalledWith(
+      "memory-id",
+      "Generated output block",
+      expect.objectContaining({
+        project: "HumanTick",
+        memory_type: "output",
+        tags: ["output", "report"],
+        title: "MM-012",
+        ref_id: "MM-012",
+        source_type: "document",
+      })
+    );
+    expect(mockSaveNode).toHaveBeenCalledWith(
+      "memory-id",
+      "output",
+      "HumanTick",
+      ["output", "report"],
+      "MM-012",
+      "MM-012"
+    );
   });
 
   it("preference routes only to Qdrant", async () => {
@@ -100,8 +123,33 @@ describe("orchestrateSearch", () => {
       expect.any(Array),
       "HumanTick",
       3,
-      ["report"]
+      ["report"],
+      undefined,
+      undefined,
+      undefined
     );
     expect(results[0].full_content).toBe("full output text");
+  });
+
+  it("passes ref_id, title, and source_type filters to Qdrant search", async () => {
+    mockSearchPoints.mockResolvedValue([]);
+
+    await orchestrateSearch(new Array(768).fill(0.1), {
+      query: "MM-012",
+      ref_id: "MM-012",
+      title: "Task Plan",
+      source_type: "document",
+      limit: 1,
+    });
+
+    expect(mockSearchPoints).toHaveBeenCalledWith(
+      expect.any(Array),
+      undefined,
+      1,
+      undefined,
+      "MM-012",
+      "Task Plan",
+      "document"
+    );
   });
 });

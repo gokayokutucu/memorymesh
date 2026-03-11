@@ -32,7 +32,9 @@ export async function saveNode(
   id: string,
   memory_type: MemoryType,
   project: string,
-  tags: string[]
+  tags: string[],
+  title?: string,
+  refId?: string
 ): Promise<void> {
   const activeDriver = await getDriver();
   if (!activeDriver) {
@@ -46,7 +48,9 @@ export async function saveNode(
       MERGE (m:Memory {id: $id})
       SET m.memory_type = $memory_type,
           m.project = $project,
-          m.created_at = datetime($created_at)
+          m.created_at = datetime($created_at),
+          m.title = $title,
+          m.ref_id = $ref_id
       WITH m
       MATCH (other:Memory {project: $project})
       WHERE other.id <> $id
@@ -57,6 +61,8 @@ export async function saveNode(
         memory_type,
         project,
         created_at: new Date().toISOString(),
+        title: title ?? null,
+        ref_id: refId ?? null,
       }
     );
 

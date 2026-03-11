@@ -35,7 +35,10 @@ export async function searchPoints(
   vector: number[],
   project: string | undefined,
   limit: number,
-  tags?: string[]
+  tags?: string[],
+  refId?: string,
+  title?: string,
+  sourceType?: string
 ): Promise<ISearchResult[]> {
   const must: Array<Record<string, unknown>> = [];
   if (project) {
@@ -44,7 +47,41 @@ export async function searchPoints(
   if (tags && tags.length > 0) {
     must.push({ key: "tags", match: { any: tags } });
   }
+  if (refId) {
+    must.push({ key: "ref_id", match: { value: refId } });
+  }
+  if (title) {
+    must.push({ key: "title", match: { value: title } });
+  }
+  if (sourceType) {
+    must.push({ key: "source_type", match: { value: sourceType } });
+  }
   const filter = must.length > 0 ? { must } : undefined;
+
+  if (refId) {
+    const exactResults = await client.scroll(COLLECTION, {
+      limit,
+      filter,
+      with_payload: true,
+      with_vector: false,
+    });
+
+    return exactResults.points.map((point) => {
+      const p = point.payload as unknown as IMemoryPayload;
+      return {
+        id: String(point.id),
+        content: p.content,
+        project: p.project,
+        memory_type: p.memory_type,
+        similarity_score: 1,
+        created_at: p.created_at,
+        tags: p.tags,
+        title: p.title,
+        ref_id: p.ref_id,
+        source_type: p.source_type,
+      };
+    });
+  }
 
   const results = await client.search(COLLECTION, {
     vector,
@@ -63,6 +100,9 @@ export async function searchPoints(
       similarity_score: r.score,
       created_at: p.created_at,
       tags: p.tags,
+      title: p.title,
+      ref_id: p.ref_id,
+      source_type: p.source_type,
     };
   });
 }

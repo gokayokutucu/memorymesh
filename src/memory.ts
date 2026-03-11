@@ -18,6 +18,9 @@ export async function searchMemory(
   input: ISearchMemoryInput
 ): Promise<ISearchResult[]> {
   await ensureCollection();
+  if (input.ref_id) {
+    return orchestrateSearch([], input);
+  }
   const vector = await embed(input.query);
   return orchestrateSearch(vector, input);
 }

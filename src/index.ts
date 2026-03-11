@@ -45,13 +45,28 @@ function createServer(): McpServer {
       tags: z.array(z.string()).optional().describe(
         "Short topic keywords inferred from conversation context, e.g. ['auth', 'jwt', 'docker']. Infer these yourself — do not ask the user."
       ),
+      title: z
+        .string()
+        .optional()
+        .describe("Human-readable memory title, e.g. 'Task: API bootstrap' or 'MM-012'"),
+      ref_id: z
+        .string()
+        .optional()
+        .describe("Explicit identifier for exact retrieval, e.g. 'MM-012' or 'TASK-001'"),
+      source_type: z
+        .enum(["code_block", "email", "document", "plan", "summary"])
+        .optional()
+        .describe("Source content type"),
     },
-    async ({ content, project, memory_type, tags }) => {
+    async ({ content, project, memory_type, tags, title, ref_id, source_type }) => {
       const id = await saveMemory({
         content,
         project: project ?? "general",
         memory_type,
         tags,
+        title,
+        ref_id,
+        source_type,
       });
       return { content: [{ type: "text", text: `Memory saved with id: ${id}` }] };
     }
@@ -65,9 +80,29 @@ function createServer(): McpServer {
       project: z.string().optional().describe("Limit search to a specific project"),
       limit: z.number().optional().describe("Max results to return (default 5)"),
       tags: z.array(z.string()).optional().describe("Filter results by tags"),
+      ref_id: z
+        .string()
+        .optional()
+        .describe("Exact ID lookup, e.g. 'MM-012'"),
+      title: z
+        .string()
+        .optional()
+        .describe("Filter by exact title"),
+      source_type: z
+        .enum(["code_block", "email", "document", "plan", "summary"])
+        .optional()
+        .describe("Filter by source type"),
     },
-    async ({ query, project, limit, tags }) => {
-      const results = await searchMemory({ query, project, limit, tags });
+    async ({ query, project, limit, tags, ref_id, title, source_type }) => {
+      const results = await searchMemory({
+        query,
+        project,
+        limit,
+        tags,
+        ref_id,
+        title,
+        source_type,
+      });
       if (results.length === 0) {
         return { content: [{ type: "text", text: "No relevant memories found." }] };
       }
@@ -76,7 +111,14 @@ function createServer(): McpServer {
           const tagsPart =
             r.tags && r.tags.length > 0 ? ` [${r.tags.join(", ")}]` : "";
           const outputContent = r.full_content ?? r.content;
-          return `[${i + 1}] (${r.project} / ${r.memory_type} / score: ${r.similarity_score.toFixed(3)})${tagsPart}\n${outputContent}`;
+          const metadataParts = [
+            r.ref_id ? `ref_id: ${r.ref_id}` : "",
+            r.title ? `title: ${r.title}` : "",
+            r.source_type ? `source_type: ${r.source_type}` : "",
+          ].filter((item) => item.length > 0);
+          const metadataLine =
+            metadataParts.length > 0 ? `\n${metadataParts.join(" | ")}` : "";
+          return `[${i + 1}] (${r.project} / ${r.memory_type} / score: ${r.similarity_score.toFixed(3)})${tagsPart}${metadataLine}\n${outputContent}`;
         })
         .join("\n\n");
       return { content: [{ type: "text", text: formatted }] };

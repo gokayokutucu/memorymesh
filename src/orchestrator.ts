@@ -13,6 +13,9 @@ export async function orchestrateSave(
     memory_type: input.memory_type,
     created_at: new Date().toISOString(),
     tags: input.tags,
+    title: input.title,
+    ref_id: input.ref_id,
+    source_type: input.source_type,
   };
 
   const id = await savePoint(vector, payload);
@@ -22,11 +25,21 @@ export async function orchestrateSave(
       project: input.project,
       memory_type: input.memory_type,
       tags: input.tags ?? [],
+      title: input.title,
+      ref_id: input.ref_id,
+      source_type: input.source_type,
     });
   }
 
   if (input.memory_type !== "preference") {
-    await saveNode(id, input.memory_type, input.project, input.tags ?? []);
+    await saveNode(
+      id,
+      input.memory_type,
+      input.project,
+      input.tags ?? [],
+      input.title,
+      input.ref_id
+    );
   }
 
   return id;
@@ -40,7 +53,10 @@ export async function orchestrateSearch(
     vector,
     input.project,
     input.limit ?? 5,
-    input.tags
+    input.tags,
+    input.ref_id,
+    input.title,
+    input.source_type
   );
 
   const ids = qdrantResults.map((result) => result.id);
