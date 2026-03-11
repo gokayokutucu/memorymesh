@@ -54,9 +54,6 @@ services:
       - MONGO_PORT=27017
       - MONGO_DB=memorymesh
       - NEO4J_URI=bolt://neo4j:7687
-    volumes:
-      - .:/app
-      - /app/node_modules
 
 volumes:
   qdrant_storage:
