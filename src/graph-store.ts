@@ -138,3 +138,118 @@ export async function getRelated(id: string): Promise<string[]> {
     await session.close();
   }
 }
+
+export async function queryByTags(
+  tags: string[],
+  limit = 20
+): Promise<string[]> {
+  if (tags.length === 0) {
+    return [];
+  }
+
+  const activeDriver = await getDriver();
+  if (!activeDriver) {
+    return [];
+  }
+
+  const session = activeDriver.session();
+  try {
+    const result = await session.run(
+      `
+      MATCH (m:Memory)-[:HAS_TAG]->(t:Tag)
+      WHERE t.name IN $tags
+      RETURN DISTINCT m.id AS id, m.created_at AS created_at
+      ORDER BY m.created_at DESC
+      LIMIT $limit
+      `,
+      { tags, limit: neo4j.int(limit) }
+    );
+
+    return result.records
+      .map((record) => record.get("id"))
+      .filter((value): value is string => typeof value === "string");
+  } catch (error) {
+    warnOnce(error);
+    return [];
+  } finally {
+    await session.close();
+  }
+}
+
+export async function queryByDateRange(
+  after?: string,
+  before?: string,
+  project?: string,
+  limit = 20
+): Promise<string[]> {
+  const activeDriver = await getDriver();
+  if (!activeDriver) {
+    return [];
+  }
+
+  const session = activeDriver.session();
+  try {
+    const result = await session.run(
+      `
+      MATCH (m:Memory)
+      WHERE ($after IS NULL OR m.created_at >= datetime($after))
+        AND ($before IS NULL OR m.created_at <= datetime($before))
+        AND ($project IS NULL OR m.project = $project)
+      RETURN m.id AS id
+      ORDER BY m.created_at DESC
+      LIMIT $limit
+      `,
+      {
+        after: after ?? null,
+        before: before ?? null,
+        project: project ?? null,
+        limit: neo4j.int(limit),
+      }
+    );
+
+    return result.records
+      .map((record) => record.get("id"))
+      .filter((value): value is string => typeof value === "string");
+  } catch (error) {
+    warnOnce(error);
+    return [];
+  } finally {
+    await session.close();
+  }
+}
+
+export async function queryRelated(
+  ids: string[],
+  limit = 20
+): Promise<string[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+
+  const activeDriver = await getDriver();
+  if (!activeDriver) {
+    return [];
+  }
+
+  const session = activeDriver.session();
+  try {
+    const result = await session.run(
+      `
+      MATCH (m:Memory)-[:SAME_PROJECT|HAS_TAG*1..2]-(related:Memory)
+      WHERE m.id IN $ids AND NOT related.id IN $ids
+      RETURN DISTINCT related.id AS id
+      LIMIT $limit
+      `,
+      { ids, limit: neo4j.int(limit) }
+    );
+
+    return result.records
+      .map((record) => record.get("id"))
+      .filter((value): value is string => typeof value === "string");
+  } catch (error) {
+    warnOnce(error);
+    return [];
+  } finally {
+    await session.close();
+  }
+}

@@ -149,3 +149,31 @@ export async function listProjects(): Promise<
     memory_count,
   }));
 }
+
+export async function getPointsByIds(ids: string[]): Promise<ISearchResult[]> {
+  if (ids.length === 0) {
+    return [];
+  }
+
+  const points = await client.retrieve(COLLECTION, {
+    ids,
+    with_payload: true,
+    with_vector: false,
+  });
+
+  return points.map((point) => {
+    const payload = point.payload as unknown as IMemoryPayload;
+    return {
+      id: String(point.id),
+      content: payload.content,
+      project: payload.project,
+      memory_type: payload.memory_type,
+      similarity_score: 0,
+      created_at: payload.created_at,
+      tags: payload.tags,
+      title: payload.title,
+      ref_id: payload.ref_id,
+      source_type: payload.source_type,
+    };
+  });
+}

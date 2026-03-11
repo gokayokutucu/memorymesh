@@ -9,14 +9,22 @@ jest.mock("../graph-store");
 
 const mockSavePoint = storage.savePoint as jest.MockedFunction<typeof storage.savePoint>;
 const mockSearchPoints = storage.searchPoints as jest.MockedFunction<typeof storage.searchPoints>;
+const mockGetPointsByIds = storage.getPointsByIds as jest.MockedFunction<typeof storage.getPointsByIds>;
 const mockSaveDocument = documentStore.saveDocument as jest.MockedFunction<typeof documentStore.saveDocument>;
 const mockGetDocuments = documentStore.getDocuments as jest.MockedFunction<typeof documentStore.getDocuments>;
 const mockSaveNode = graphStore.saveNode as jest.MockedFunction<typeof graphStore.saveNode>;
+const mockQueryByTags = graphStore.queryByTags as jest.MockedFunction<typeof graphStore.queryByTags>;
+const mockQueryByDateRange = graphStore.queryByDateRange as jest.MockedFunction<typeof graphStore.queryByDateRange>;
+const mockQueryRelated = graphStore.queryRelated as jest.MockedFunction<typeof graphStore.queryRelated>;
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockSavePoint.mockResolvedValue("memory-id");
   mockGetDocuments.mockResolvedValue(new Map());
+  mockGetPointsByIds.mockResolvedValue([]);
+  mockQueryByTags.mockResolvedValue([]);
+  mockQueryByDateRange.mockResolvedValue([]);
+  mockQueryRelated.mockResolvedValue([]);
 });
 
 describe("orchestrateSave", () => {
@@ -128,6 +136,8 @@ describe("orchestrateSearch", () => {
         limit: 3,
       })
     );
+    expect(mockQueryByTags).toHaveBeenCalledWith(["report"], 3);
+    expect(mockQueryRelated).toHaveBeenCalledWith(["a1"], 3);
     expect(results[0].full_content).toBe("full output text");
   });
 
@@ -152,5 +162,58 @@ describe("orchestrateSearch", () => {
         limit: 1,
       })
     );
+  });
+
+  it("merges graph IDs and fetches missing records from Qdrant by ID", async () => {
+    mockSearchPoints.mockResolvedValue([
+      {
+        id: "q1",
+        content: "from vector",
+        project: "HumanTick",
+        memory_type: "context",
+        similarity_score: 0.95,
+        created_at: "2026-03-10T10:00:00.000Z",
+      },
+    ]);
+    mockQueryByTags.mockResolvedValue(["g1"]);
+    mockQueryByDateRange.mockResolvedValue(["g2"]);
+    mockQueryRelated.mockResolvedValue(["g3"]);
+    mockGetPointsByIds.mockResolvedValue([
+      {
+        id: "g1",
+        content: "from tag query",
+        project: "HumanTick",
+        memory_type: "learning",
+        similarity_score: 0,
+        created_at: "2026-03-09T10:00:00.000Z",
+      },
+      {
+        id: "g2",
+        content: "from date query",
+        project: "HumanTick",
+        memory_type: "context",
+        similarity_score: 0,
+        created_at: "2026-03-08T10:00:00.000Z",
+      },
+      {
+        id: "g3",
+        content: "related",
+        project: "HumanTick",
+        memory_type: "decision",
+        similarity_score: 0,
+        created_at: "2026-03-07T10:00:00.000Z",
+      },
+    ]);
+
+    const results = await orchestrateSearch(new Array(768).fill(0.1), {
+      query: "architecture",
+      project: "HumanTick",
+      tags: ["arch"],
+      after: "2026-03-01T00:00:00Z",
+      limit: 4,
+    });
+
+    expect(mockGetPointsByIds).toHaveBeenCalledWith(["g1", "g2", "g3"]);
+    expect(results).toHaveLength(4);
   });
 });

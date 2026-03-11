@@ -1,6 +1,6 @@
 import { getDocuments, saveDocument } from "./document-store";
-import { saveNode } from "./graph-store";
-import { savePoint, searchPoints } from "./storage";
+import { queryByDateRange, queryByTags, queryRelated, saveNode } from "./graph-store";
+import { getPointsByIds, savePoint, searchPoints } from "./storage";
 import { ISaveMemoryInput, ISearchMemoryInput, ISearchResult } from "./types";
 
 export async function orchestrateSave(
@@ -49,13 +49,60 @@ export async function orchestrateSearch(
   vector: number[],
   input: ISearchMemoryInput
 ): Promise<ISearchResult[]> {
+  const limit = input.limit ?? 5;
   const qdrantResults = await searchPoints(vector, input);
+  const qdrantIds = qdrantResults.map((result) => result.id);
 
-  const ids = qdrantResults.map((result) => result.id);
-  const docs = await getDocuments(ids);
+  const tagIds = input.tags && input.tags.length > 0
+    ? await queryByTags(input.tags, limit)
+    : [];
+  const dateRangeIds = input.after || input.before
+    ? await queryByDateRange(input.after, input.before, input.project, limit)
+    : [];
+  const relatedIds = await queryRelated(qdrantIds, limit);
 
-  return qdrantResults.map((result) => ({
+  const allIds = [...qdrantIds, ...tagIds, ...dateRangeIds, ...relatedIds];
+  const uniqueIds = [...new Set(allIds)];
+
+  const existingResultMap = new Map<string, ISearchResult>();
+  for (const result of qdrantResults) {
+    existingResultMap.set(result.id, result);
+  }
+
+  const missingIds = uniqueIds.filter((id) => !existingResultMap.has(id));
+  const fetchedResults = await getPointsByIds(missingIds);
+  for (const result of fetchedResults) {
+    existingResultMap.set(result.id, result);
+  }
+
+  const mergedResults = uniqueIds
+    .map((id) => existingResultMap.get(id))
+    .filter((result): result is ISearchResult => Boolean(result));
+
+  const sortedResults = sortResults(mergedResults, input.sort_by).slice(0, limit);
+  const docs = await getDocuments(sortedResults.map((result) => result.id));
+
+  return sortedResults.map((result) => ({
     ...result,
     full_content: docs.get(result.id),
   }));
+}
+
+function sortResults(
+  results: ISearchResult[],
+  sortBy: ISearchMemoryInput["sort_by"]
+): ISearchResult[] {
+  if (sortBy === "recency") {
+    return [...results].sort(
+      (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at)
+    );
+  }
+
+  if (sortBy === "oldest") {
+    return [...results].sort(
+      (a, b) => Date.parse(a.created_at) - Date.parse(b.created_at)
+    );
+  }
+
+  return results;
 }

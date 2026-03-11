@@ -1,20 +1,30 @@
 import { saveMemory, searchMemory, getProjects } from "../memory";
 import * as embeddings from "../embeddings";
 import * as storage from "../storage";
+import * as graphStore from "../graph-store";
 
 jest.mock("../embeddings");
 jest.mock("../storage");
+jest.mock("../graph-store");
 
 const mockEmbed = embeddings.embed as jest.MockedFunction<typeof embeddings.embed>;
 const mockEnsure = storage.ensureCollection as jest.MockedFunction<typeof storage.ensureCollection>;
 const mockSave = storage.savePoint as jest.MockedFunction<typeof storage.savePoint>;
 const mockSearch = storage.searchPoints as jest.MockedFunction<typeof storage.searchPoints>;
+const mockGetPointsByIds = storage.getPointsByIds as jest.MockedFunction<typeof storage.getPointsByIds>;
 const mockList = storage.listProjects as jest.MockedFunction<typeof storage.listProjects>;
+const mockQueryByTags = graphStore.queryByTags as jest.MockedFunction<typeof graphStore.queryByTags>;
+const mockQueryByDateRange = graphStore.queryByDateRange as jest.MockedFunction<typeof graphStore.queryByDateRange>;
+const mockQueryRelated = graphStore.queryRelated as jest.MockedFunction<typeof graphStore.queryRelated>;
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockEmbed.mockResolvedValue(new Array(768).fill(0.1));
   mockEnsure.mockResolvedValue(undefined);
+  mockGetPointsByIds.mockResolvedValue([]);
+  mockQueryByTags.mockResolvedValue([]);
+  mockQueryByDateRange.mockResolvedValue([]);
+  mockQueryRelated.mockResolvedValue([]);
 });
 
 describe("saveMemory", () => {
