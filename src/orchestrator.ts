@@ -1,11 +1,13 @@
 import { getDocuments, saveDocument } from "./document-store";
 import { queryByDateRange, queryByTags, queryRelated, saveNode } from "./graph-store";
 import { getPointsByIds, savePoint, searchPoints } from "./storage";
+import { Profiler } from "./profiler";
 import { ISaveMemoryInput, ISearchMemoryInput, ISearchResult } from "./types";
 
 export async function orchestrateSave(
   input: ISaveMemoryInput,
-  vector: number[]
+  vector: number[],
+  profiler?: Profiler
 ): Promise<string> {
   const payload = {
     content: input.content,
@@ -18,28 +20,43 @@ export async function orchestrateSave(
     source_type: input.source_type,
   };
 
-  const id = await savePoint(vector, payload);
+  const saveQdrant = async (): Promise<string> => savePoint(vector, payload);
+  const id = profiler
+    ? await profiler.time("qdrant_save", saveQdrant)
+    : await saveQdrant();
 
   if (input.memory_type === "output") {
-    await saveDocument(id, input.content, {
+    const saveMongo = async (): Promise<void> =>
+      saveDocument(id, input.content, {
       project: input.project,
       memory_type: input.memory_type,
       tags: input.tags ?? [],
       title: input.title,
       ref_id: input.ref_id,
       source_type: input.source_type,
-    });
+      });
+    if (profiler) {
+      await profiler.time("mongo_save", saveMongo);
+    } else {
+      await saveMongo();
+    }
   }
 
   if (input.memory_type !== "preference") {
-    await saveNode(
-      id,
-      input.memory_type,
-      input.project,
-      input.tags ?? [],
-      input.title,
-      input.ref_id
-    );
+    const saveGraph = async (): Promise<void> =>
+      saveNode(
+        id,
+        input.memory_type,
+        input.project,
+        input.tags ?? [],
+        input.title,
+        input.ref_id
+      );
+    if (profiler) {
+      await profiler.time("neo4j_save", saveGraph);
+    } else {
+      await saveGraph();
+    }
   }
 
   return id;
@@ -47,19 +64,33 @@ export async function orchestrateSave(
 
 export async function orchestrateSearch(
   vector: number[],
-  input: ISearchMemoryInput
+  input: ISearchMemoryInput,
+  profiler?: Profiler
 ): Promise<ISearchResult[]> {
   const limit = input.limit ?? 5;
-  const qdrantResults = await searchPoints(vector, input);
+  const qdrantResults = profiler
+    ? await profiler.time("qdrant_search", async () => searchPoints(vector, input))
+    : await searchPoints(vector, input);
   const qdrantIds = qdrantResults.map((result) => result.id);
 
-  const tagIds = input.tags && input.tags.length > 0
-    ? await queryByTags(input.tags, limit)
-    : [];
-  const dateRangeIds = input.after || input.before
-    ? await queryByDateRange(input.after, input.before, input.project, limit)
-    : [];
-  const relatedIds = await queryRelated(qdrantIds, limit);
+  const runGraphQueries = async (): Promise<{
+    tagIds: string[];
+    dateRangeIds: string[];
+    relatedIds: string[];
+  }> => {
+    const tagIds = input.tags && input.tags.length > 0
+      ? await queryByTags(input.tags, limit)
+      : [];
+    const dateRangeIds = input.after || input.before
+      ? await queryByDateRange(input.after, input.before, input.project, limit)
+      : [];
+    const relatedIds = await queryRelated(qdrantIds, limit);
+    return { tagIds, dateRangeIds, relatedIds };
+  };
+  const graphQueryResult = profiler
+    ? await profiler.time("neo4j_query", runGraphQueries)
+    : await runGraphQueries();
+  const { tagIds, dateRangeIds, relatedIds } = graphQueryResult;
 
   const allIds = [...qdrantIds, ...tagIds, ...dateRangeIds, ...relatedIds];
   const uniqueIds = [...new Set(allIds)];
@@ -70,7 +101,9 @@ export async function orchestrateSearch(
   }
 
   const missingIds = uniqueIds.filter((id) => !existingResultMap.has(id));
-  const fetchedResults = await getPointsByIds(missingIds);
+  const fetchedResults = profiler
+    ? await profiler.time("qdrant_search", async () => getPointsByIds(missingIds))
+    : await getPointsByIds(missingIds);
   for (const result of fetchedResults) {
     existingResultMap.set(result.id, result);
   }
@@ -79,10 +112,15 @@ export async function orchestrateSearch(
     .map((id) => existingResultMap.get(id))
     .filter((result): result is ISearchResult => Boolean(result));
 
-  const sortedResults = sortResults(mergedResults, input.sort_by).slice(0, limit);
-  const docs = await getDocuments(sortedResults.map((result) => result.id));
+  const sortedResults = profiler
+    ? await profiler.time("recency_sort", async () => sortResults(mergedResults, input.sort_by))
+    : sortResults(mergedResults, input.sort_by);
+  const limitedResults = sortedResults.slice(0, limit);
+  const docs = profiler
+    ? await profiler.time("mongo_fetch", async () => getDocuments(limitedResults.map((result) => result.id)))
+    : await getDocuments(limitedResults.map((result) => result.id));
 
-  return sortedResults.map((result) => ({
+  return limitedResults.map((result) => ({
     ...result,
     full_content: docs.get(result.id),
   }));

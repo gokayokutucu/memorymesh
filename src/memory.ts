@@ -7,22 +7,33 @@ import {
   IProjectSummary,
 } from "./types";
 import { orchestrateSave, orchestrateSearch } from "./orchestrator";
+import { Profiler } from "./profiler";
 
 export async function saveMemory(input: ISaveMemoryInput): Promise<string> {
   await ensureCollection();
-  const vector = await embed(input.content);
-  return orchestrateSave(input, vector);
+  const profiler = new Profiler();
+  try {
+    const vector = await profiler.time("embed", async () => embed(input.content));
+    return await orchestrateSave(input, vector, profiler);
+  } finally {
+    console.error(profiler.summary());
+  }
 }
 
 export async function searchMemory(
   input: ISearchMemoryInput
 ): Promise<ISearchResult[]> {
   await ensureCollection();
-  if (input.ref_id) {
-    return orchestrateSearch([], input);
+  const profiler = new Profiler();
+  try {
+    if (input.ref_id) {
+      return await orchestrateSearch([], input, profiler);
+    }
+    const vector = await profiler.time("embed", async () => embed(input.query));
+    return await orchestrateSearch(vector, input, profiler);
+  } finally {
+    console.error(profiler.summary());
   }
-  const vector = await embed(input.query);
-  return orchestrateSearch(vector, input);
 }
 
 export async function getProjects(): Promise<IProjectSummary[]> {

@@ -9,7 +9,8 @@
     "dev": "ts-node src/index.ts",
     "test": "jest --forceExit",
     "integration:mongo": "ts-node scripts/integration-test-mongo.ts",
-    "integration:full": "ts-node scripts/integration-test-full.ts"
+    "integration:full": "ts-node scripts/integration-test-full.ts",
+    "profile": "ts-node scripts/profile-run.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
