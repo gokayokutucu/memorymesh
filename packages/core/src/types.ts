@@ -1,35 +1,25 @@
-export type MemoryType = "decision" | "learning" | "context" | "preference" | "output";
-export type SourceType = "code_block" | "email" | "document" | "plan" | "summary";
+export type MemoryType =
+  | "decision"
+  | "learning"
+  | "context"
+  | "preference"
+  | "output";
 
-export interface IMemoryPayload {
-  content: string;
-  project: string;
-  memory_type: MemoryType;
-  created_at: string;
-  tags?: string[];
-  title?: string;
-  ref_id?: string;
-  source_type?: SourceType;
-}
-
-export interface ISearchResult {
-  id: string;
-  content: string;
-  project: string;
-  memory_type: MemoryType;
-  similarity_score: number;
-  created_at: string;
-  tags?: string[];
-  full_content?: string;
-  title?: string;
-  ref_id?: string;
-  source_type?: SourceType;
-}
+export type SourceType =
+  | "code_block"
+  | "email"
+  | "document"
+  | "plan"
+  | "summary";
 
 export interface ISaveMemoryInput {
   content: string;
   project: string;
   memory_type: MemoryType;
+  importance?: number;
+  conversation_id?: string;
+  parent_memory_id?: string;
+  derived_from_memory_id?: string;
   tags?: string[];
   title?: string;
   ref_id?: string;
@@ -38,7 +28,7 @@ export interface ISaveMemoryInput {
 
 export interface ISaveMemoryResult {
   id: string;
-  status: "pending" | "saved";
+  status: "pending" | "saved" | "partial" | "failed";
 }
 
 export interface ISearchMemoryInput {
@@ -52,6 +42,27 @@ export interface ISearchMemoryInput {
   sort_by?: "relevance" | "recency" | "oldest";
   before?: string;
   after?: string;
+}
+
+export interface ISearchResult {
+  id: string;
+  content: string;
+  preview?: string;
+  project: string;
+  semantic_score: number;
+  memory_type: MemoryType;
+  similarity_score: number;
+  hybrid_score?: number;
+  created_at: string;
+  importance?: number;
+  conversation_id?: string;
+  parent_memory_id?: string;
+  derived_from_memory_id?: string;
+  tags?: string[];
+  full_content?: string;
+  title?: string;
+  ref_id?: string;
+  source_type?: SourceType;
 }
 
 export interface IProjectSummary {

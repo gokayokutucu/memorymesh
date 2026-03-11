@@ -1,60 +1,57 @@
-export type MemoryType = "decision" | "learning" | "context" | "preference" | "output";
-export type SourceType = "code_block" | "email" | "document" | "plan" | "summary";
+import type {
+  ISaveMemoryResult,
+  MemoryType,
+  SourceType,
+} from "@memorymesh/core";
 
+export {
+  MemoryType,
+  SourceType,
+  ISaveMemoryInput,
+  ISaveMemoryResult,
+  ISearchMemoryInput,
+  ISearchResult,
+  IProjectSummary,
+} from "@memorymesh/core";
+
+// Server-internal payload shape stored in backing stores.
 export interface IMemoryPayload {
   content: string;
   project: string;
   memory_type: MemoryType;
   created_at: string;
+  importance?: number;
+  conversation_id?: string;
+  parent_memory_id?: string;
+  derived_from_memory_id?: string;
   tags?: string[];
   title?: string;
   ref_id?: string;
   source_type?: SourceType;
 }
 
-export interface ISearchResult {
+export interface ISaveStoreState {
+  qdrant_saved: boolean;
+  mongo_saved: boolean;
+  neo4j_saved: boolean;
+}
+
+export interface ISaveMemoryStatus extends ISaveMemoryResult, ISaveStoreState {
+  updated_at: string;
+  error?: string;
+}
+
+export interface ISaveOrchestrationResult extends ISaveStoreState {
   id: string;
-  content: string;
-  project: string;
-  memory_type: MemoryType;
-  similarity_score: number;
-  created_at: string;
-  tags?: string[];
-  full_content?: string;
-  title?: string;
-  ref_id?: string;
-  source_type?: SourceType;
 }
 
-export interface ISaveMemoryInput {
-  content: string;
-  project: string;
-  memory_type: MemoryType;
-  tags?: string[];
-  title?: string;
-  ref_id?: string;
-  source_type?: SourceType;
-}
-
-export interface ISaveMemoryResult {
-  id: string;
-  status: "pending" | "saved";
-}
-
-export interface ISearchMemoryInput {
-  query: string;
+export interface IGetMemoryByRefInput {
+  ref_id: string;
   project?: string;
   limit?: number;
-  tags?: string[];
-  ref_id?: string;
-  title?: string;
-  source_type?: string;
-  sort_by?: "relevance" | "recency" | "oldest";
-  before?: string;
-  after?: string;
 }
 
-export interface IProjectSummary {
-  project: string;
-  memory_count: number;
+export interface IGetRelatedMemoriesInput {
+  id: string;
+  limit?: number;
 }
