@@ -1,0 +1,16 @@
+{
+  "name": "@memorymesh/cli",
+  "version": "0.1.0",
+  "dependencies": {
+    "@memorymesh/core": "*"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "ts-node": "latest",
+    "typescript": "latest"
+  },
+  "scripts": {
+    "build": "npm run build -w @memorymesh/core && tsc",
+    "import:gpt": "ts-node scripts/gpt-import.ts"
+  }
+}
