@@ -33,7 +33,12 @@ function createServer(): McpServer {
     "Save important context to persistent memory. ROUTING RULES: if the response contains a code block, email, document or plan -> use memory_type='output' and set content to the FULL text (stored in MongoDB for exact retrieval). For all other types -> set content to a concise [INPUT]/[OUTPUT] summary (stored in Qdrant for semantic search). Always infer project and tags from conversation.",
     {
       content: z.string().describe(
-        "For memory_type='output': paste the FULL code block, email, or document exactly as produced. For all other types: write a concise [INPUT] summary / [OUTPUT] summary."
+        "For memory_type='output': include the FULL content exactly as produced,\n" +
+        "using these fencing rules:\n" +
+        "- If the content is a markdown document -> wrap with ```markdown ... ```\n" +
+        "- For all other content (code in any language: TypeScript, C#, Cypher, SQL,\n" +
+        "  bash, etc.) -> wrap with ~~~<lang> ... ~~~ (tilde fences, NOT backticks)\n" +
+        "This ensures backtick fences are never nested inside each other."
       ),
       project: z
         .string()
