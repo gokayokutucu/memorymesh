@@ -22,19 +22,23 @@ describe("@memorymesh/core types", () => {
       content: "Auth design notes",
       project: "MemoryMesh",
       memory_type: "decision",
+      created_at: "2026-03-11T10:00:00.000Z",
       importance: 8,
       conversation_id: "conv-123",
       parent_memory_id: "mem-001",
       derived_from_memory_id: "mem-000",
+      source_agent: "chatgpt",
+      source_format: "gpt_export",
+      message_index: 2,
       tags: ["auth", "jwt"],
       title: "Auth decision",
       ref_id: "MM-100",
-      source_type: "document",
+      source_type: "imported_conversation",
     };
 
     expect(input.importance).toBe(8);
     expect(input.conversation_id).toBe("conv-123");
-    expect(input.source_type).toBe("document");
+    expect(input.source_type).toBe("imported_conversation");
   });
 
   it("supports save result lifecycle statuses", () => {
@@ -76,6 +80,9 @@ describe("@memorymesh/core types", () => {
       conversation_id: "conv-123",
       parent_memory_id: "mem-001",
       derived_from_memory_id: "mem-002",
+      source_agent: "chatgpt",
+      source_format: "gpt_export",
+      message_index: 2,
       tags: ["typescript"],
       full_content: "Long raw content",
       title: "Task output",

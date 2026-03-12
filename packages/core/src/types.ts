@@ -10,16 +10,21 @@ export type SourceType =
   | "email"
   | "document"
   | "plan"
-  | "summary";
+  | "summary"
+  | "imported_conversation";
 
 export interface ISaveMemoryInput {
   content: string;
   project: string;
   memory_type: MemoryType;
+  created_at?: string;
   importance?: number;
   conversation_id?: string;
   parent_memory_id?: string;
   derived_from_memory_id?: string;
+  source_agent?: string;
+  source_format?: string;
+  message_index?: number;
   tags?: string[];
   title?: string;
   ref_id?: string;
@@ -58,6 +63,9 @@ export interface ISearchResult {
   conversation_id?: string;
   parent_memory_id?: string;
   derived_from_memory_id?: string;
+  source_agent?: string;
+  source_format?: string;
+  message_index?: number;
   tags?: string[];
   full_content?: string;
   title?: string;

@@ -3,3 +3,8 @@ dist/
 .env
 qdrant_storage/
 ollama_models/
+samples/
+gpt/
+gpt-extraction/
+samples/gpt/gpt-extraction/*.json
+native/importer-engine/target/

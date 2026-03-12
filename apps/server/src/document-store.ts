@@ -51,10 +51,10 @@ export async function saveDocument(
   id: string,
   content: string,
   metadata: Record<string, unknown>
-): Promise<void> {
+): Promise<boolean> {
   const docCollection = await getCollection();
   if (!docCollection) {
-    return;
+    return false;
   }
 
   try {
@@ -69,8 +69,10 @@ export async function saveDocument(
       },
       { upsert: true }
     );
+    return true;
   } catch (error) {
     warnOnce(error);
+    return false;
   }
 }
 

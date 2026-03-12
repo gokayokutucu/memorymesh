@@ -32,13 +32,21 @@ export async function saveNode(
   id: string,
   memory_type: MemoryType,
   project: string,
+  createdAt: string,
   tags: string[],
   title?: string,
-  refId?: string
-): Promise<void> {
+  refId?: string,
+  importance?: number,
+  conversationId?: string,
+  parentMemoryId?: string,
+  derivedFromMemoryId?: string,
+  sourceAgent?: string,
+  sourceFormat?: string,
+  messageIndex?: number
+): Promise<boolean> {
   const activeDriver = await getDriver();
   if (!activeDriver) {
-    return;
+    return false;
   }
 
   const session = activeDriver.session();
@@ -50,34 +58,74 @@ export async function saveNode(
           m.project = $project,
           m.created_at = datetime($created_at),
           m.title = $title,
-          m.ref_id = $ref_id
-      WITH m
-      MATCH (other:Memory {project: $project})
-      WHERE other.id <> $id
-      MERGE (m)-[:SAME_PROJECT]->(other)
+          m.ref_id = $ref_id,
+          m.importance = $importance,
+          m.conversation_id = $conversation_id,
+          m.source_agent = $source_agent,
+          m.source_format = $source_format,
+          m.message_index = $message_index,
+          m.parent_memory_id = $parent_memory_id,
+          m.derived_from_memory_id = $derived_from_memory_id
+      MERGE (p:Project {name: $project})
+      MERGE (m)-[bp:BELONGS_TO]->(p)
+      SET bp.kind = 'inferred'
       `,
       {
         id,
         memory_type,
         project,
-        created_at: new Date().toISOString(),
+        created_at: createdAt,
         title: title ?? null,
         ref_id: refId ?? null,
+        importance: importance ?? null,
+        conversation_id: conversationId ?? null,
+        source_agent: sourceAgent ?? null,
+        source_format: sourceFormat ?? null,
+        message_index: messageIndex ?? null,
+        parent_memory_id: parentMemoryId ?? null,
+        derived_from_memory_id: derivedFromMemoryId ?? null,
       }
     );
+
+    if (parentMemoryId) {
+      await session.run(
+        `
+        MERGE (parent:Memory {id: $parentId})
+        MATCH (m:Memory {id: $id})
+        MERGE (m)-[r:CHILD_OF]->(parent)
+        SET r.kind = 'explicit'
+        `,
+        { id, parentId: parentMemoryId }
+      );
+    }
+
+    if (derivedFromMemoryId) {
+      await session.run(
+        `
+        MERGE (source:Memory {id: $sourceId})
+        MATCH (m:Memory {id: $id})
+        MERGE (m)-[r:DERIVED_FROM]->(source)
+        SET r.kind = 'explicit'
+        `,
+        { id, sourceId: derivedFromMemoryId }
+      );
+    }
 
     for (const tag of tags) {
       await session.run(
         `
         MATCH (m:Memory {id: $id})
         MERGE (t:Tag {name: $tag})
-        MERGE (m)-[:HAS_TAG]->(t)
+        MERGE (m)-[ht:HAS_TAG]->(t)
+        SET ht.kind = 'inferred'
         `,
         { id, tag }
       );
     }
+    return true;
   } catch (error) {
     warnOnce(error);
+    return false;
   } finally {
     await session.close();
   }
@@ -100,9 +148,10 @@ export async function linkNodes(
       `
       MATCH (a:Memory {id: $fromId})
       MATCH (b:Memory {id: $toId})
-      MERGE (a)-[r:${safeRelation}]->(b)
+      MERGE (a)-[r:RELATED {relation_type: $relationType}]->(b)
+      SET r.kind = 'explicit'
       `,
-      { fromId, toId }
+      { fromId, toId, relationType: safeRelation }
     );
   } catch (error) {
     warnOnce(error);
@@ -121,7 +170,23 @@ export async function getRelated(id: string): Promise<string[]> {
   try {
     const result = await session.run(
       `
-      MATCH (m:Memory {id: $id})-[:SAME_PROJECT|HAS_TAG*1..2]-(related:Memory)
+      MATCH (m:Memory {id: $id})
+      CALL {
+        WITH m
+        MATCH (m)-[:HAS_TAG]->(:Tag)<-[:HAS_TAG]-(related:Memory)
+        WHERE related.id <> m.id
+        RETURN related
+        UNION
+        WITH m
+        MATCH (m)-[:BELONGS_TO]->(:Project)<-[:BELONGS_TO]-(related:Memory)
+        WHERE related.id <> m.id
+        RETURN related
+        UNION
+        WITH m
+        MATCH (m)-[r:RELATED {kind: 'explicit'}]-(related:Memory)
+        WHERE related.id <> m.id
+        RETURN related
+      }
       RETURN DISTINCT related.id AS id
       LIMIT 50
       `,
@@ -235,8 +300,24 @@ export async function queryRelated(
   try {
     const result = await session.run(
       `
-      MATCH (m:Memory)-[:SAME_PROJECT|HAS_TAG*1..2]-(related:Memory)
-      WHERE m.id IN $ids AND NOT related.id IN $ids
+      MATCH (m:Memory)
+      WHERE m.id IN $ids
+      CALL {
+        WITH m
+        MATCH (m)-[:HAS_TAG]->(:Tag)<-[:HAS_TAG]-(related:Memory)
+        WHERE NOT related.id IN $ids
+        RETURN related
+        UNION
+        WITH m
+        MATCH (m)-[:BELONGS_TO]->(:Project)<-[:BELONGS_TO]-(related:Memory)
+        WHERE NOT related.id IN $ids
+        RETURN related
+        UNION
+        WITH m
+        MATCH (m)-[r:RELATED {kind: 'explicit'}]-(related:Memory)
+        WHERE NOT related.id IN $ids
+        RETURN related
+      }
       RETURN DISTINCT related.id AS id
       LIMIT $limit
       `,

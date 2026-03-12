@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
+    "build": "npm run build -w @memorymesh/core && npm run build -w @memorymesh/server && npm run build -w @memorymesh/cli",
     "test": "npm run test --workspaces --if-present",
     "docker:build": "docker compose build"
   }
