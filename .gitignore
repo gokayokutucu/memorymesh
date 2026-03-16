@@ -8,3 +8,9 @@ gpt/
 gpt-extraction/
 samples/gpt/gpt-extraction/*.json
 native/importer-engine/target/
+temporary_test.js
+temporary_test_output.log
+
+temporary_consistency_audit.log
+temporary_mongo_audit.js
+temporary_mongo_audit.log

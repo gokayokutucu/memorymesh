@@ -11,6 +11,7 @@ import {
   importConversations as runImportConversations,
   ISaveMemoryInput,
 } from "@memorymesh/core";
+import { createRuntimeImporterGateway, ensureEmbeddingModelAvailable } from "@memorymesh/runtime";
 
 interface IMcpToolResponse {
   result?: {
@@ -24,6 +25,9 @@ export interface IImportRunOptions {
   delayMs?: number;
   verbose?: boolean;
   importPolicy?: IImportPolicy;
+  gateway?: IImporterGateway;
+  callbacks?: Partial<IImportCallbacks>;
+  showConversationProgress?: boolean;
 }
 
 export interface IImportRunResult {
@@ -34,6 +38,7 @@ export interface IImportRunResult {
 }
 
 const MCP_ENDPOINT = process.env.MEMORYMESH_MCP_URL ?? "http://localhost:3456/mcp";
+const IMPORT_GATEWAY_MODE = process.env.MEMORYMESH_IMPORT_GATEWAY_MODE ?? "local";
 
 export function parseConversations(raw: string): IGptConversation[] {
   return parseConversationsShared(raw);
@@ -55,49 +60,173 @@ export async function importConversations(
 ): Promise<IImportRunResult> {
   const delayMs = options.delayMs ?? 3000;
   const verbose = options.verbose ?? false;
+  const showConversationProgress = options.showConversationProgress ?? true;
   const importPolicy = options.importPolicy ?? "skip_existing";
-
-  const gateway: IImporterGateway = {
-    async saveMemory(payload: ISaveMemoryInput): Promise<void> {
-      await callMcpSaveTool(payload);
-    },
-    async getMemoryByRef(refId: string, projectName?: string): Promise<ISearchResult[]> {
-      return callMcpGetMemoryByRefTool(refId, projectName);
-    },
+  const externalCallbacks = options.callbacks;
+  const progressState: {
+    active: boolean;
+    current: number;
+    total: number;
+    title: string;
+    messageCount: number;
+    startTimeMs: number;
+    lineRendered: boolean;
+    lastLineLength: number;
+  } = {
+    active: false,
+    current: 0,
+    total: conversations.length,
+    title: "",
+    messageCount: 0,
+    startTimeMs: 0,
+    lineRendered: false,
+    lastLineLength: 0,
   };
+
+  const writeProgress = (value: string): void => {
+    process.stdout.write(value);
+  };
+
+  const renderProgressBar = (
+    current: number,
+    total: number,
+    title: string,
+    messageCount: number
+  ): void => {
+    if (!showConversationProgress) {
+      return;
+    }
+    if (total <= 0) {
+      return;
+    }
+    const width = 24;
+    const ratio = Math.min(Math.max(current / total, 0), 1);
+    const filled = Math.round(width * ratio);
+    const bar = `${"#".repeat(filled)}${"-".repeat(width - filled)}`;
+    const trimmedTitle = truncateTitle(title, 44);
+    const eta = formatEta(progressState.startTimeMs, current, total);
+    const line = `[progress] [${bar}] ${current}/${total} conv | ${trimmedTitle} (${messageCount} msg) | ETA ${eta}`;
+    const paddedLine = line.padEnd(progressState.lastLineLength, " ");
+    writeProgress(`\r${paddedLine}`);
+    progressState.lastLineLength = paddedLine.length;
+    progressState.lineRendered = true;
+  };
+
+  const finishProgressLine = (): void => {
+    if (!showConversationProgress) {
+      return;
+    }
+    if (!progressState.lineRendered) {
+      return;
+    }
+    writeProgress(`\r${" ".repeat(progressState.lastLineLength)}\r`);
+    writeProgress("\n");
+    progressState.lineRendered = false;
+    progressState.lastLineLength = 0;
+  };
+
+  const logWithProgress = (line: string): void => {
+    if (!showConversationProgress) {
+      console.log(line);
+      return;
+    }
+    finishProgressLine();
+    console.log(line);
+    if (progressState.active) {
+      renderProgressBar(
+        progressState.current,
+        progressState.total,
+        progressState.title,
+        progressState.messageCount
+      );
+    }
+  };
+
+  const gateway =
+    options.gateway ??
+    (IMPORT_GATEWAY_MODE === "remote"
+      ? createMcpImporterGateway()
+      : createRuntimeImporterGateway());
+
+  const usesLocalRuntimeGateway = !options.gateway && IMPORT_GATEWAY_MODE !== "remote";
+  if (!dryRun && usesLocalRuntimeGateway) {
+    await ensureEmbeddingModelAvailable();
+  }
 
   const callbacks: IImportCallbacks = {
     onConversationStart(context): void {
-      console.log(
-        `Importing conv ${context.conversation_index}/${context.total_conversations}: ${context.title} (${context.message_count} msg)`
+      progressState.active = true;
+      progressState.current = context.conversation_index;
+      progressState.total = context.total_conversations;
+      progressState.title = context.title;
+      progressState.messageCount = context.message_count;
+      if (progressState.startTimeMs === 0) {
+        progressState.startTimeMs = Date.now();
+      }
+      renderProgressBar(
+        progressState.current,
+        progressState.total,
+        progressState.title,
+        progressState.messageCount
       );
+      externalCallbacks?.onConversationStart?.(context);
     },
     onMessageImported(context): void {
-      if (!dryRun && !verbose) {
+      externalCallbacks?.onMessageImported?.(context);
+      if (!verbose) {
         return;
       }
-      console.log(
+      logWithProgress(
         formatDryRunLine({
+          conversationTitle: context.conversation_title,
+          messageIndex: context.message_index,
           role: context.role,
           memoryType: context.memory_type,
+          refId: context.ref_id,
           preview: context.preview,
           status: dryRun ? "IMPORT" : "SAVED",
         })
       );
     },
     onMessageSkipped(context): void {
-      if (!dryRun && !verbose) {
+      externalCallbacks?.onMessageSkipped?.(context);
+      if (!verbose) {
         return;
       }
-      console.log(
+      logWithProgress(
         formatDryRunLine({
+          conversationTitle: context.conversation_title,
+          messageIndex: context.message_index,
           role: context.role,
           memoryType: "-",
+          refId: context.ref_id,
+          payloadBytes: context.payload_bytes,
           preview: context.preview,
           status: "SKIP",
           reason: context.reason,
         })
       );
+    },
+    onConversationComplete(context): void {
+      progressState.current = context.conversation_index;
+      progressState.title = context.title;
+      renderProgressBar(
+        progressState.current,
+        progressState.total,
+        progressState.title,
+        progressState.messageCount
+      );
+      if (context.conversation_index >= context.total_conversations) {
+        progressState.active = false;
+        finishProgressLine();
+      }
+      externalCallbacks?.onConversationComplete?.(context);
+    },
+    onMessageStart(context): void {
+      externalCallbacks?.onMessageStart?.(context);
+    },
+    onMessageStageChange(context): void {
+      externalCallbacks?.onMessageStageChange?.(context);
     },
   };
 
@@ -121,11 +250,48 @@ export async function importConversations(
   };
 }
 
+function truncateTitle(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 3).trimEnd()}...`;
+}
+
+function formatEta(startTimeMs: number, current: number, total: number): string {
+  if (startTimeMs <= 0 || current <= 0 || total <= 0) {
+    return "--:--";
+  }
+  const elapsedMs = Date.now() - startTimeMs;
+  if (elapsedMs <= 0) {
+    return "--:--";
+  }
+  const estimatedTotalMs = (elapsedMs / current) * total;
+  const remainingMs = Math.max(0, estimatedTotalMs - elapsedMs);
+  const seconds = Math.round(remainingMs / 1000);
+  const minutesPart = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const secondsPart = String(seconds % 60).padStart(2, "0");
+  return `${minutesPart}:${secondsPart}`;
+}
+
 async function callMcpSaveTool(payload: ISaveMemoryInput): Promise<void> {
   const response = await callMcpTool("save_memory", payload);
   if (response.error) {
     throw new Error(`MCP save_memory call returned an error payload: ${JSON.stringify(response.error)}`);
   }
+}
+
+function createMcpImporterGateway(): IImporterGateway {
+  return {
+    async saveMemory(payload: ISaveMemoryInput): Promise<void> {
+      await callMcpSaveTool(payload);
+    },
+    async getMemoryByRef(
+      refId: string,
+      projectName?: string
+    ): Promise<ISearchResult[]> {
+      return callMcpGetMemoryByRefTool(refId, projectName);
+    },
+  };
 }
 
 async function callMcpGetMemoryByRefTool(
@@ -182,14 +348,25 @@ async function callMcpTool(name: string, args: object): Promise<IMcpToolResponse
 }
 
 function formatDryRunLine(input: {
+  conversationTitle: string;
+  messageIndex: number;
   role: string;
   memoryType: string;
+  refId?: string;
+  payloadBytes?: number;
   preview: string;
   status: "IMPORT" | "SKIP" | "SAVED";
   reason?: string;
 }): string {
+  const contextParts = [
+    `title=${input.conversationTitle}`,
+    `msg_index=${input.messageIndex}`,
+    `role=${input.role}`,
+    input.refId ? `ref_id=${input.refId}` : "",
+    typeof input.payloadBytes === "number" ? `payload_bytes=${input.payloadBytes}` : "",
+  ].filter((part) => part.length > 0);
   const reasonPart = input.reason ? ` | reason=${input.reason}` : "";
-  return `[dry-run] ${input.status} | role=${input.role} | memory_type=${input.memoryType}${reasonPart}\n  preview: ${input.preview}`;
+  return `[dry-run] ${input.status} | ${contextParts.join(" | ")} | memory_type=${input.memoryType}${reasonPart}\n  preview: ${input.preview}`;
 }
 
 function parseGetMemoryByRefStructuredResult(

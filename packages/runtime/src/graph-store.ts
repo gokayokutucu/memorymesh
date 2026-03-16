@@ -1,5 +1,9 @@
 import neo4j, { Driver } from "neo4j-driver";
 import { MemoryType } from "./types";
+import {
+  executeWithRetry,
+  isTransientNeo4jError,
+} from "./resilience";
 
 const NEO4J_URI = process.env.NEO4J_URI ?? "bolt://localhost:7687";
 
@@ -20,7 +24,15 @@ async function getDriver(): Promise<Driver | null> {
 
   try {
     driver = neo4j.driver(NEO4J_URI, neo4j.auth.basic("", ""));
-    await driver.verifyConnectivity();
+    await executeWithRetry(
+      async () => driver!.verifyConnectivity(),
+      {
+        store: "neo4j",
+        operation: "verifyConnectivity",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
+      }
+    );
     return driver;
   } catch (error) {
     warnOnce(error);
@@ -51,8 +63,10 @@ export async function saveNode(
 
   const session = activeDriver.session();
   try {
-    await session.run(
-      `
+    await executeWithRetry(
+      async () =>
+        session.run(
+          `
       MERGE (m:Memory {id: $id})
       SET m.memory_type = $memory_type,
           m.project = $project,
@@ -70,56 +84,90 @@ export async function saveNode(
       MERGE (m)-[bp:BELONGS_TO]->(p)
       SET bp.kind = 'inferred'
       `,
+          {
+            id,
+            memory_type,
+            project,
+            created_at: createdAt,
+            title: title ?? null,
+            ref_id: refId ?? null,
+            importance: importance ?? null,
+            conversation_id: conversationId ?? null,
+            source_agent: sourceAgent ?? null,
+            source_format: sourceFormat ?? null,
+            message_index: messageIndex ?? null,
+            parent_memory_id: parentMemoryId ?? null,
+            derived_from_memory_id: derivedFromMemoryId ?? null,
+          }
+        ),
       {
-        id,
-        memory_type,
-        project,
-        created_at: createdAt,
-        title: title ?? null,
-        ref_id: refId ?? null,
-        importance: importance ?? null,
-        conversation_id: conversationId ?? null,
-        source_agent: sourceAgent ?? null,
-        source_format: sourceFormat ?? null,
-        message_index: messageIndex ?? null,
-        parent_memory_id: parentMemoryId ?? null,
-        derived_from_memory_id: derivedFromMemoryId ?? null,
+        store: "neo4j",
+        operation: "saveNodeMemory",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
       }
     );
 
     if (parentMemoryId) {
-      await session.run(
-        `
+      await executeWithRetry(
+        async () =>
+          session.run(
+            `
         MERGE (parent:Memory {id: $parentId})
         MATCH (m:Memory {id: $id})
         MERGE (m)-[r:CHILD_OF]->(parent)
         SET r.kind = 'explicit'
         `,
-        { id, parentId: parentMemoryId }
+            { id, parentId: parentMemoryId }
+          ),
+        {
+          store: "neo4j",
+          operation: "saveNodeParentRelation",
+          isTransient: isTransientNeo4jError,
+          transientFailureCode: "neo4j_transient_failure",
+        }
       );
     }
 
     if (derivedFromMemoryId) {
-      await session.run(
-        `
+      await executeWithRetry(
+        async () =>
+          session.run(
+            `
         MERGE (source:Memory {id: $sourceId})
         MATCH (m:Memory {id: $id})
         MERGE (m)-[r:DERIVED_FROM]->(source)
         SET r.kind = 'explicit'
         `,
-        { id, sourceId: derivedFromMemoryId }
+            { id, sourceId: derivedFromMemoryId }
+          ),
+        {
+          store: "neo4j",
+          operation: "saveNodeDerivedRelation",
+          isTransient: isTransientNeo4jError,
+          transientFailureCode: "neo4j_transient_failure",
+        }
       );
     }
 
     for (const tag of tags) {
-      await session.run(
-        `
+      await executeWithRetry(
+        async () =>
+          session.run(
+            `
         MATCH (m:Memory {id: $id})
         MERGE (t:Tag {name: $tag})
         MERGE (m)-[ht:HAS_TAG]->(t)
         SET ht.kind = 'inferred'
         `,
-        { id, tag }
+            { id, tag }
+          ),
+        {
+          store: "neo4j",
+          operation: "saveNodeTagRelation",
+          isTransient: isTransientNeo4jError,
+          transientFailureCode: "neo4j_transient_failure",
+        }
       );
     }
     return true;
@@ -144,14 +192,23 @@ export async function linkNodes(
   const safeRelation = relation.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase() || "RELATED";
   const session = activeDriver.session();
   try {
-    await session.run(
-      `
+    await executeWithRetry(
+      async () =>
+        session.run(
+          `
       MATCH (a:Memory {id: $fromId})
       MATCH (b:Memory {id: $toId})
       MERGE (a)-[r:RELATED {relation_type: $relationType}]->(b)
       SET r.kind = 'explicit'
       `,
-      { fromId, toId, relationType: safeRelation }
+          { fromId, toId, relationType: safeRelation }
+        ),
+      {
+        store: "neo4j",
+        operation: "linkNodes",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
+      }
     );
   } catch (error) {
     warnOnce(error);
@@ -168,8 +225,10 @@ export async function getRelated(id: string): Promise<string[]> {
 
   const session = activeDriver.session();
   try {
-    const result = await session.run(
-      `
+    const result = await executeWithRetry(
+      async () =>
+        session.run(
+          `
       MATCH (m:Memory {id: $id})
       CALL {
         WITH m
@@ -190,7 +249,14 @@ export async function getRelated(id: string): Promise<string[]> {
       RETURN DISTINCT related.id AS id
       LIMIT 50
       `,
-      { id }
+          { id }
+        ),
+      {
+        store: "neo4j",
+        operation: "getRelated",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
+      }
     );
 
     return result.records
@@ -219,15 +285,24 @@ export async function queryByTags(
 
   const session = activeDriver.session();
   try {
-    const result = await session.run(
-      `
+    const result = await executeWithRetry(
+      async () =>
+        session.run(
+          `
       MATCH (m:Memory)-[:HAS_TAG]->(t:Tag)
       WHERE t.name IN $tags
       RETURN DISTINCT m.id AS id, m.created_at AS created_at
       ORDER BY m.created_at DESC
       LIMIT $limit
       `,
-      { tags, limit: neo4j.int(limit) }
+          { tags, limit: neo4j.int(limit) }
+        ),
+      {
+        store: "neo4j",
+        operation: "queryByTags",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
+      }
     );
 
     return result.records
@@ -254,8 +329,10 @@ export async function queryByDateRange(
 
   const session = activeDriver.session();
   try {
-    const result = await session.run(
-      `
+    const result = await executeWithRetry(
+      async () =>
+        session.run(
+          `
       MATCH (m:Memory)
       WHERE ($after IS NULL OR m.created_at >= datetime($after))
         AND ($before IS NULL OR m.created_at <= datetime($before))
@@ -264,11 +341,18 @@ export async function queryByDateRange(
       ORDER BY m.created_at DESC
       LIMIT $limit
       `,
+          {
+            after: after ?? null,
+            before: before ?? null,
+            project: project ?? null,
+            limit: neo4j.int(limit),
+          }
+        ),
       {
-        after: after ?? null,
-        before: before ?? null,
-        project: project ?? null,
-        limit: neo4j.int(limit),
+        store: "neo4j",
+        operation: "queryByDateRange",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
       }
     );
 
@@ -298,8 +382,10 @@ export async function queryRelated(
 
   const session = activeDriver.session();
   try {
-    const result = await session.run(
-      `
+    const result = await executeWithRetry(
+      async () =>
+        session.run(
+          `
       MATCH (m:Memory)
       WHERE m.id IN $ids
       CALL {
@@ -321,7 +407,14 @@ export async function queryRelated(
       RETURN DISTINCT related.id AS id
       LIMIT $limit
       `,
-      { ids, limit: neo4j.int(limit) }
+          { ids, limit: neo4j.int(limit) }
+        ),
+      {
+        store: "neo4j",
+        operation: "queryRelated",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
+      }
     );
 
     return result.records

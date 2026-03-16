@@ -1,6 +1,10 @@
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { IMemoryPayload, ISearchMemoryInput, ISearchResult } from "./types";
 import { randomUUID } from "crypto";
+import {
+  executeWithRetry,
+  isTransientQdrantError,
+} from "./resilience";
 
 const QDRANT_HOST = process.env.QDRANT_HOST ?? "localhost";
 const QDRANT_PORT = parseInt(process.env.QDRANT_PORT ?? "6333");
@@ -8,15 +12,38 @@ const COLLECTION = process.env.QDRANT_COLLECTION ?? "memories";
 const VECTOR_SIZE = 768; // nomic-embed-text dimension
 
 const client = new QdrantClient({ host: QDRANT_HOST, port: QDRANT_PORT });
+let collectionExistsCache = false;
 
 export async function ensureCollection(): Promise<void> {
-  const collections = await client.getCollections();
+  if (collectionExistsCache) {
+    return;
+  }
+
+  const collections = await executeWithRetry(
+    async () => client.getCollections(),
+    {
+      store: "qdrant",
+      operation: "getCollections",
+      isTransient: isTransientQdrantError,
+      transientFailureCode: "qdrant_transient_failure",
+    }
+  );
   const exists = collections.collections.some((c) => c.name === COLLECTION);
   if (!exists) {
-    await client.createCollection(COLLECTION, {
-      vectors: { size: VECTOR_SIZE, distance: "Cosine" },
-    });
+    await executeWithRetry(
+      async () =>
+        client.createCollection(COLLECTION, {
+          vectors: { size: VECTOR_SIZE, distance: "Cosine" },
+        }),
+      {
+        store: "qdrant",
+        operation: "createCollection",
+        isTransient: isTransientQdrantError,
+        transientFailureCode: "qdrant_transient_failure",
+      }
+    );
   }
+  collectionExistsCache = true;
 }
 
 export async function savePoint(
@@ -25,10 +52,14 @@ export async function savePoint(
   id?: string
 ): Promise<string> {
   const pointId = id ?? randomUUID();
-  await client.upsert(COLLECTION, {
-    wait: true,
-    points: [{ id: pointId, vector, payload: payload as unknown as Record<string, unknown> }],
-  });
+  await executeQdrantOperation(
+    "upsert",
+    async () =>
+      client.upsert(COLLECTION, {
+        wait: true,
+        points: [{ id: pointId, vector, payload: payload as unknown as Record<string, unknown> }],
+      })
+  );
   return pointId;
 }
 
@@ -62,12 +93,16 @@ export async function searchPoints(
   const limit = input.limit ?? 5;
 
   if (input.ref_id) {
-    const exactResults = await client.scroll(COLLECTION, {
-      limit,
-      filter,
-      with_payload: true,
-      with_vector: false,
-    });
+    const exactResults = await executeQdrantOperation(
+      "scroll",
+      async () =>
+        client.scroll(COLLECTION, {
+          limit,
+          filter,
+          with_payload: true,
+          with_vector: false,
+        })
+    );
 
     const mappedResults = exactResults.points.map((point) => {
       const p = point.payload as unknown as IMemoryPayload;
@@ -96,12 +131,16 @@ export async function searchPoints(
     return sortResults(mappedResults, input.sort_by);
   }
 
-  const results = await client.search(COLLECTION, {
-    vector,
-    limit,
-    filter,
-    with_payload: true,
-  });
+  const results = await executeQdrantOperation(
+    "search",
+    async () =>
+      client.search(COLLECTION, {
+        vector,
+        limit,
+        filter,
+        with_payload: true,
+      })
+  );
 
   const mappedResults = results.map((r) => {
     const p = r.payload as unknown as IMemoryPayload;
@@ -150,10 +189,14 @@ function sortResults(
 export async function listProjects(): Promise<
   { project: string; memory_count: number }[]
 > {
-  const result = await client.scroll(COLLECTION, {
-    limit: 1000,
-    with_payload: true,
-  });
+  const result = await executeQdrantOperation(
+    "scrollProjects",
+    async () =>
+      client.scroll(COLLECTION, {
+        limit: 1000,
+        with_payload: true,
+      })
+  );
 
   const counts: Record<string, number> = {};
   for (const point of result.points) {
@@ -172,11 +215,15 @@ export async function getPointsByIds(ids: string[]): Promise<ISearchResult[]> {
     return [];
   }
 
-  const points = await client.retrieve(COLLECTION, {
-    ids,
-    with_payload: true,
-    with_vector: false,
-  });
+  const points = await executeQdrantOperation(
+    "retrieve",
+    async () =>
+      client.retrieve(COLLECTION, {
+        ids,
+        with_payload: true,
+        with_vector: false,
+      })
+  );
 
   return points.map((point) => {
     const payload = point.payload as unknown as IMemoryPayload;
@@ -201,4 +248,44 @@ export async function getPointsByIds(ids: string[]): Promise<ISearchResult[]> {
       source_type: payload.source_type,
     };
   });
+}
+
+async function executeQdrantOperation<T>(
+  operation: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  try {
+    return await executeWithRetry(fn, {
+      store: "qdrant",
+      operation,
+      isTransient: isTransientQdrantError,
+      transientFailureCode: "qdrant_transient_failure",
+    });
+  } catch (error) {
+    if (!isCollectionMissingError(error)) {
+      throw error;
+    }
+
+    collectionExistsCache = false;
+    await ensureCollection();
+    return executeWithRetry(fn, {
+      store: "qdrant",
+      operation: `${operation}_after_revalidate`,
+      isTransient: isTransientQdrantError,
+      transientFailureCode: "qdrant_transient_failure",
+    });
+  }
+}
+
+function isCollectionMissingError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    message.includes("collection") &&
+    (message.includes("not found") || message.includes("does not exist"))
+  );
+}
+
+export function resetCollectionCacheForTests(): void {
+  collectionExistsCache = false;
 }

@@ -1,6 +1,6 @@
 import * as dotenv from "dotenv";
 import { execSync } from "node:child_process";
-import { saveMemory, searchMemory } from "../src/memory";
+import { saveMemory, searchMemory } from "@memorymesh/runtime";
 
 dotenv.config();
 

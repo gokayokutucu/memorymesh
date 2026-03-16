@@ -1,5 +1,6 @@
 import { Dirent, readdirSync, readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
+import { IGptConversation } from "@memorymesh/core";
 import {
   classifyJsonFileContent,
   IJsonFileClassification,
@@ -9,6 +10,7 @@ import {
 export interface IScannedJsonFile extends IJsonFileClassification {
   path: string;
   content?: string;
+  conversations?: IGptConversation[];
 }
 
 export interface IScanReport {

@@ -1,7 +1,7 @@
 import * as dotenv from "dotenv";
 dotenv.config();
 
-import { saveMemory, searchMemory, getProjects } from "../src/memory";
+import { getProjects, saveMemory, searchMemory } from "@memorymesh/runtime";
 
 async function run() {
   console.log("=== MemoryMesh Integration Test ===\n");

@@ -1,26 +1,25 @@
 {
-  "name": "@memorymesh/cli",
+  "name": "@memorymesh/runtime",
   "version": "0.1.0",
-  "bin": {
-    "memorymesh": "dist/src/main.js"
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
   },
   "dependencies": {
     "@memorymesh/core": "*",
-    "@memorymesh/runtime": "*"
+    "@qdrant/js-client-rest": "latest",
+    "mongodb": "^6.21.0",
+    "neo4j-driver": "^5.28.3",
+    "ollama": "latest"
   },
   "devDependencies": {
     "@types/jest": "latest",
     "@types/node": "latest",
     "jest": "latest",
     "ts-jest": "latest",
-    "ts-node": "latest",
     "typescript": "latest"
-  },
-  "scripts": {
-    "build": "npm run build -w @memorymesh/core && tsc",
-    "import:gpt": "ts-node scripts/gpt-import.ts",
-    "cli": "ts-node src/main.ts",
-    "test": "jest"
   },
   "jest": {
     "preset": "ts-jest",

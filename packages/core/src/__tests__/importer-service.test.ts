@@ -227,6 +227,74 @@ describe("importer-service", () => {
     expect(gateway.saveMemory).toHaveBeenCalledTimes(1);
   });
 
+  it("continues importing when save fails with payload_too_large", async () => {
+    const gateway: IImporterGateway = {
+      saveMemory: jest.fn(async (input) => {
+        if (input.content.includes("too big")) {
+          const error = new Error("payload_too_large");
+          (error as Error & { code?: string; payload_bytes?: number }).code =
+            "payload_too_large";
+          (error as Error & { code?: string; payload_bytes?: number }).payload_bytes = 4096;
+          throw error;
+        }
+      }),
+      getMemoryByRef: jest.fn(async () => []),
+    };
+
+    const result = await importConversations(
+      [
+        {
+          title: "T2",
+          messages: [
+            { role: "assistant", content: "too big artifact payload" },
+            { role: "assistant", content: "Decision: use queue worker." },
+          ],
+        },
+      ],
+      "MemoryMesh",
+      false,
+      gateway
+    );
+
+    expect(result.saved).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.skipped_reasons.payload_too_large).toBe(1);
+  });
+
+  it("does not treat partial persistence as imported", async () => {
+    const gateway: IImporterGateway = {
+      saveMemory: jest.fn(async (input) => {
+        if (input.content.includes("partial")) {
+          const error = new Error("partial_persistence") as Error & {
+            code?: string;
+          };
+          error.code = "partial_persistence";
+          throw error;
+        }
+      }),
+      getMemoryByRef: jest.fn(async () => []),
+    };
+
+    const result = await importConversations(
+      [
+        {
+          title: "T3",
+          messages: [
+            { role: "assistant", content: "partial write happened" },
+            { role: "assistant", content: "Decision: use queue worker." },
+          ],
+        },
+      ],
+      "MemoryMesh",
+      false,
+      gateway
+    );
+
+    expect(result.saved).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.skipped_reasons.partial_persistence).toBe(1);
+  });
+
   it("skip_existing policy avoids duplicates on repeated imports", async () => {
     const savedRefIds = new Set<string>();
     const gateway: IImporterGateway = {
@@ -435,5 +503,79 @@ describe("importer-service", () => {
 
     expect(decision.should_import).toBe(false);
     expect(decision.skip_reason).toBe("overwrite_existing_not_supported");
+  });
+
+  it("emits message stage callbacks during dedup and save flow", async () => {
+    const stages: string[] = [];
+    const gateway: IImporterGateway = {
+      saveMemory: jest.fn(async () => undefined),
+      getMemoryByRef: jest.fn(async () => []),
+    };
+
+    await importConversations(
+      [
+        {
+          title: "Stage Conv",
+          source_conversation_id: "conv-stage",
+          messages: [{ role: "assistant", content: "Decision: use Redis." }],
+        },
+      ],
+      "MemoryMesh",
+      false,
+      gateway,
+      {
+        callbacks: {
+          onMessageStageChange: (context) => {
+            stages.push(context.stage);
+          },
+        },
+      }
+    );
+
+    expect(stages).toEqual(
+      expect.arrayContaining(["dedup", "save", "embedding", "completed"])
+    );
+  });
+
+  it("adds embedding chunk stage detail when content requires chunking", async () => {
+    const stageDetails: Array<string | undefined> = [];
+    const gateway: IImporterGateway = {
+      saveMemory: jest.fn(async () => undefined),
+      getMemoryByRef: jest.fn(async () => []),
+    };
+    const previousChunkSize = process.env.MEMORYMESH_EMBED_CHUNK_MAX_CHARS;
+    process.env.MEMORYMESH_EMBED_CHUNK_MAX_CHARS = "50";
+
+    try {
+      await importConversations(
+        [
+          {
+            title: "Chunk Detail",
+            source_conversation_id: "conv-chunk",
+            messages: [{ role: "assistant", content: "a".repeat(220) }],
+          },
+        ],
+        "MemoryMesh",
+        false,
+        gateway,
+        {
+          callbacks: {
+            onMessageStageChange: (context) => {
+              if (context.stage === "embedding") {
+                stageDetails.push(context.stage_detail);
+              }
+            },
+          },
+        }
+      );
+    } finally {
+      if (previousChunkSize === undefined) {
+        delete process.env.MEMORYMESH_EMBED_CHUNK_MAX_CHARS;
+      } else {
+        process.env.MEMORYMESH_EMBED_CHUNK_MAX_CHARS = previousChunkSize;
+      }
+    }
+
+    expect(stageDetails).toContain("chunk 1/5");
   });
 });

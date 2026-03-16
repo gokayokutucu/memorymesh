@@ -28,6 +28,10 @@ describe("graph-store query functions", () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
+    process.env.MEMORYMESH_RETRY_MAX_ATTEMPTS = "2";
+    process.env.MEMORYMESH_RETRY_BASE_DELAY_MS = "0";
+    process.env.MEMORYMESH_RETRY_MAX_DELAY_MS = "0";
+    process.env.MEMORYMESH_RETRY_JITTER_MS = "0";
     mockVerifyConnectivity.mockResolvedValue(undefined);
     mockClose.mockResolvedValue(undefined);
   });
@@ -154,5 +158,23 @@ describe("graph-store query functions", () => {
         relationType: "DEPENDS_ON",
       })
     );
+  });
+
+  it("retries transient neo4j query failure and then succeeds", async () => {
+    mockRun
+      .mockRejectedValueOnce(
+        Object.assign(new Error("database unavailable"), {
+          code: "Neo.TransientError.General.DatabaseUnavailable",
+        })
+      )
+      .mockResolvedValueOnce({
+        records: [{ get: () => "m-7" }],
+      });
+    const graphStore = await import("../graph-store");
+
+    const ids = await graphStore.queryByTags(["auth"], 3);
+
+    expect(ids).toEqual(["m-7"]);
+    expect(mockRun).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,11 +1,16 @@
 import * as dotenv from "dotenv";
 dotenv.config();
 
-import { embed } from "../src/embeddings";
-import { ensureCollection } from "../src/storage";
-import { orchestrateSave, orchestrateSearch } from "../src/orchestrator";
-import { Profiler, ITimingEntry } from "../src/profiler";
-import { ISaveMemoryInput, ISearchMemoryInput } from "../src/types";
+import {
+  embed,
+  ensureCollection,
+  orchestrateSave,
+  orchestrateSearch,
+  Profiler,
+  ITimingEntry,
+  ISaveMemoryInput,
+  ISearchMemoryInput,
+} from "@memorymesh/runtime";
 
 interface IProfileRow {
   operation: string;

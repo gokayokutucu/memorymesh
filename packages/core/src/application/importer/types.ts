@@ -30,6 +30,7 @@ export interface IGptMessage {
 export interface IGptConversation {
   title: string;
   source_conversation_id?: string;
+  message_offset?: number;
   messages: IGptMessage[];
 }
 
@@ -63,6 +64,23 @@ export interface IImportEvaluation {
 }
 
 export interface IImportCallbacks {
+  onMessageStart?: (context: {
+    conversation_title: string;
+    role: string;
+    message_index: number;
+    total_messages: number;
+    preview: string;
+    ref_id?: string;
+  }) => void;
+  onMessageStageChange?: (context: {
+    conversation_title: string;
+    role: string;
+    message_index: number;
+    total_messages: number;
+    stage: "dedup" | "save" | "embedding" | "checkpoint" | "skipped" | "completed";
+    stage_detail?: string;
+    ref_id?: string;
+  }) => void;
   onConversationStart?: (context: {
     conversation_index: number;
     total_conversations: number;
@@ -72,14 +90,19 @@ export interface IImportCallbacks {
   onMessageImported?: (context: {
     conversation_title: string;
     role: string;
+    message_index: number;
     memory_type: string;
+    ref_id?: string;
     preview: string;
   }) => void;
   onMessageSkipped?: (context: {
     conversation_title: string;
     role: string;
+    message_index: number;
     reason: string;
     preview: string;
+    ref_id?: string;
+    payload_bytes?: number;
   }) => void;
   onConversationComplete?: (context: {
     conversation_index: number;

@@ -33,7 +33,18 @@ export interface ISaveMemoryInput {
 
 export interface ISaveMemoryResult {
   id: string;
-  status: "pending" | "saved" | "partial" | "failed";
+  status: "pending" | "saved" | "partial" | "failed" | "skipped";
+  error_code?:
+    | "payload_too_large"
+    | "embedding_input_too_large"
+    | "memory_write_disabled"
+    | "qdrant_transient_failure"
+    | "mongo_transient_failure"
+    | "neo4j_transient_failure";
+  error_message?: string;
+  reason?: "memory_write_disabled";
+  payload_bytes?: number;
+  max_payload_bytes?: number;
 }
 
 export interface ISearchMemoryInput {

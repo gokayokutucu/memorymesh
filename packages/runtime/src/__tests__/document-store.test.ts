@@ -15,6 +15,7 @@ jest.mock("mongodb", () => ({
 }));
 
 beforeEach(() => {
+  jest.resetModules();
   jest.clearAllMocks();
   mockCreateIndex.mockResolvedValue("documents__id");
   mockUpdateOne.mockResolvedValue(undefined);
@@ -74,5 +75,25 @@ describe("document-store", () => {
     );
     expect(docs.get("1")).toBe("doc-1");
     expect(docs.get("2")).toBe("doc-2");
+  });
+
+  it("retries transient mongo updateOne failure and then succeeds", async () => {
+    process.env.MEMORYMESH_RETRY_MAX_ATTEMPTS = "2";
+    process.env.MEMORYMESH_RETRY_BASE_DELAY_MS = "0";
+    process.env.MEMORYMESH_RETRY_MAX_DELAY_MS = "0";
+    process.env.MEMORYMESH_RETRY_JITTER_MS = "0";
+    mockUpdateOne
+      .mockRejectedValueOnce(
+        Object.assign(new Error("server selection timeout"), {
+          name: "MongoServerSelectionError",
+        })
+      )
+      .mockResolvedValueOnce(undefined);
+    const { saveDocument } = await import("../document-store");
+
+    const saved = await saveDocument("id-2", "content", { project: "HumanTick" });
+
+    expect(saved).toBe(true);
+    expect(mockUpdateOne).toHaveBeenCalledTimes(2);
   });
 });

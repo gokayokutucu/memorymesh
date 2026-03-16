@@ -1,4 +1,8 @@
 import { Collection, Db, MongoClient } from "mongodb";
+import {
+  executeWithRetry,
+  isTransientMongoError,
+} from "./resilience";
 
 const MONGO_HOST = process.env.MONGO_HOST ?? "localhost";
 const MONGO_PORT = process.env.MONGO_PORT ?? "27017";
@@ -35,11 +39,27 @@ async function getCollection(): Promise<Collection<IDocumentRecord> | null> {
       client = new MongoClient(URI);
     }
     if (!database) {
-      await client.connect();
+      await executeWithRetry(
+        async () => client!.connect(),
+        {
+          store: "mongo",
+          operation: "connect",
+          isTransient: isTransientMongoError,
+          transientFailureCode: "mongo_transient_failure",
+        }
+      );
       database = client.db(MONGO_DB);
     }
     collection = database.collection<IDocumentRecord>(COLLECTION);
-    await collection.createIndex({ _id: 1 });
+    await executeWithRetry(
+      async () => collection!.createIndex({ _id: 1 }),
+      {
+        store: "mongo",
+        operation: "createIndex",
+        isTransient: isTransientMongoError,
+        transientFailureCode: "mongo_transient_failure",
+      }
+    );
     return collection;
   } catch (error) {
     warnOnce(error);
@@ -58,16 +78,25 @@ export async function saveDocument(
   }
 
   try {
-    await docCollection.updateOne(
-      { _id: id },
+    await executeWithRetry(
+      async () =>
+        docCollection.updateOne(
+          { _id: id },
+          {
+            $set: {
+              content,
+              metadata,
+              created_at: new Date(),
+            },
+          },
+          { upsert: true }
+        ),
       {
-        $set: {
-          content,
-          metadata,
-          created_at: new Date(),
-        },
-      },
-      { upsert: true }
+        store: "mongo",
+        operation: "updateOne",
+        isTransient: isTransientMongoError,
+        transientFailureCode: "mongo_transient_failure",
+      }
     );
     return true;
   } catch (error) {
@@ -83,9 +112,18 @@ export async function getDocument(id: string): Promise<string | null> {
   }
 
   try {
-    const doc = await docCollection.findOne(
-      { _id: id },
-      { projection: { content: 1 } }
+    const doc = await executeWithRetry(
+      async () =>
+        docCollection.findOne(
+          { _id: id },
+          { projection: { content: 1 } }
+        ),
+      {
+        store: "mongo",
+        operation: "findOne",
+        isTransient: isTransientMongoError,
+        transientFailureCode: "mongo_transient_failure",
+      }
     );
     return doc?.content ?? null;
   } catch (error) {
@@ -106,9 +144,18 @@ export async function getDocuments(ids: string[]): Promise<Map<string, string>> 
   }
 
   try {
-    const docs = await docCollection
-      .find({ _id: { $in: ids } }, { projection: { content: 1 } })
-      .toArray();
+    const docs = await executeWithRetry(
+      async () =>
+        docCollection
+          .find({ _id: { $in: ids } }, { projection: { content: 1 } })
+          .toArray(),
+      {
+        store: "mongo",
+        operation: "findMany",
+        isTransient: isTransientMongoError,
+        transientFailureCode: "mongo_transient_failure",
+      }
+    );
     for (const doc of docs) {
       results.set(doc._id, doc.content);
     }

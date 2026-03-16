@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@memorymesh/core": "*",
+    "@memorymesh/runtime": "*",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@qdrant/js-client-rest": "latest",
     "dotenv": "latest",
