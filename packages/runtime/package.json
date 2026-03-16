@@ -1,0 +1,31 @@
+{
+  "name": "@memorymesh/runtime",
+  "version": "0.1.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@memorymesh/core": "*",
+    "@qdrant/js-client-rest": "latest",
+    "mongodb": "^6.21.0",
+    "neo4j-driver": "^5.28.3",
+    "ollama": "latest"
+  },
+  "devDependencies": {
+    "@types/jest": "latest",
+    "@types/node": "latest",
+    "jest": "latest",
+    "ts-jest": "latest",
+    "typescript": "latest"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/src/__tests__/**/*.test.ts"
+    ]
+  }
+}

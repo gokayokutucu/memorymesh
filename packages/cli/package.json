@@ -1,0 +1,32 @@
+{
+  "name": "@memorymesh/cli",
+  "version": "0.1.0",
+  "bin": {
+    "memorymesh": "dist/src/main.js"
+  },
+  "dependencies": {
+    "@memorymesh/core": "*",
+    "@memorymesh/runtime": "*"
+  },
+  "devDependencies": {
+    "@types/jest": "latest",
+    "@types/node": "latest",
+    "jest": "latest",
+    "ts-jest": "latest",
+    "ts-node": "latest",
+    "typescript": "latest"
+  },
+  "scripts": {
+    "build": "npm run build -w @memorymesh/core && tsc",
+    "import:gpt": "ts-node scripts/gpt-import.ts",
+    "cli": "ts-node src/main.ts",
+    "test": "jest"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/src/__tests__/**/*.test.ts"
+    ]
+  }
+}

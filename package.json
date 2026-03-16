@@ -1,40 +1,13 @@
 {
-  "name": "memorymesh",
-  "version": "0.1.0",
-  "description": "Local-first MCP memory server for Claude",
-  "main": "dist/index.js",
+  "name": "memorymesh-workspace",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
-    "test": "jest --forceExit",
-    "integration:mongo": "ts-node scripts/integration-test-mongo.ts",
-    "integration:full": "ts-node scripts/integration-test-full.ts",
-    "profile": "ts-node scripts/profile-run.ts"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.27.1",
-    "@qdrant/js-client-rest": "latest",
-    "dotenv": "latest",
-    "mongodb": "^6.21.0",
-    "neo4j-driver": "^5.28.3",
-    "ollama": "latest",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@types/express": "^5.0.6",
-    "@types/jest": "latest",
-    "@types/node": "latest",
-    "jest": "latest",
-    "ts-jest": "latest",
-    "ts-node": "latest",
-    "typescript": "latest"
-  },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "testMatch": [
-      "**/src/__tests__/**/*.test.ts"
-    ]
+    "build": "npm run build -w @memorymesh/core && npm run build -w @memorymesh/runtime && npm run build -w @memorymesh/server && npm run build -w @memorymesh/cli",
+    "test": "npm run test --workspaces --if-present",
+    "docker:build": "docker compose build"
   }
 }
