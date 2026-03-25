@@ -68,4 +68,27 @@ describe("RuntimeImporterGateway", () => {
 
     delete process.env.MEMORYMESH_IMPORT_SAVE_STATUS_TIMEOUT_MS;
   });
+
+  it("throws ImportInterruptedError when save status reports import interruption", async () => {
+    mockSaveMemoryForImport.mockReturnValue({ id: "id-1", status: "saved" });
+    mockGetMemoryStatus.mockReturnValue({
+      id: "id-1",
+      status: "failed",
+      error_code: "import_interrupted",
+    });
+
+    const { RuntimeImporterGateway } = await import("../importer-runtime-gateway");
+    const gateway = new RuntimeImporterGateway();
+
+    await expect(
+      gateway.saveMemory({
+        content: "import",
+        project: "MemoryMesh",
+        memory_type: "context",
+      })
+    ).rejects.toMatchObject({
+      name: "ImportInterruptedError",
+      code: "import_interrupted",
+    });
+  });
 });

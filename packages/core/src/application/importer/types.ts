@@ -1,4 +1,5 @@
 import { ISaveMemoryInput } from "../../types";
+import { ICancellationToken } from "./cancellation";
 
 export interface IRawConversation {
   id?: unknown;
@@ -55,6 +56,7 @@ export interface IImportRunOptions {
   import_policy?: IImportPolicy;
   conversation_delay_ms?: number;
   callbacks?: IImportCallbacks;
+  cancellation_token?: ICancellationToken;
 }
 
 export interface IImportEvaluation {

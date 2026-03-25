@@ -1,7 +1,9 @@
 import {
+  CancellationToken,
   classifyMessage,
   evaluateMessageForImport,
   importConversations,
+  ImportInterruptedError,
   resolveImportPolicyDecision,
   parseConversations,
 } from "../application/importer-service";
@@ -577,5 +579,35 @@ describe("importer-service", () => {
     }
 
     expect(stageDetails).toContain("chunk 1/5");
+  });
+
+  it("stops starting new saves after cancellation is requested", async () => {
+    const token = new CancellationToken();
+    const gateway: IImporterGateway = {
+      saveMemory: jest.fn(async () => {
+        token.cancel();
+      }),
+      getMemoryByRef: jest.fn(async () => []),
+    };
+
+    await expect(
+      importConversations(
+        [
+          {
+            title: "Cancel Conv",
+            messages: [
+              { role: "assistant", content: "Decision: first" },
+              { role: "assistant", content: "Decision: second" },
+            ],
+          },
+        ],
+        "MemoryMesh",
+        false,
+        gateway,
+        { cancellation_token: token }
+      )
+    ).rejects.toBeInstanceOf(ImportInterruptedError);
+
+    expect(gateway.saveMemory).toHaveBeenCalledTimes(1);
   });
 });

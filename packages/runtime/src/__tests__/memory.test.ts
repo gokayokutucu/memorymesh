@@ -4,9 +4,11 @@ import {
   getMemoryByRef,
   getRelatedMemories,
   saveMemory,
+  saveMemoryForImport,
   searchMemory,
   getProjects,
 } from "../memory";
+import { CancellationToken } from "@memorymesh/core";
 import * as embeddings from "../embeddings";
 import * as storage from "../storage";
 import * as graphStore from "../graph-store";
@@ -189,6 +191,52 @@ describe("saveMemory", () => {
     expect(status?.qdrant_saved).toBe(true);
     expect(status?.mongo_saved).toBe(true);
     expect(status?.neo4j_saved).toBe(true);
+  });
+});
+
+describe("saveMemoryForImport cancellation", () => {
+  it("does not start background work when token is already cancelled", () => {
+    const token = new CancellationToken();
+    token.cancel();
+
+    expect(() =>
+      saveMemoryForImport(
+        {
+          content: "cancelled import",
+          project: "MemoryMesh",
+          memory_type: "context",
+        },
+        { cancellationToken: token }
+      )
+    ).toThrow("Import interrupted by signal");
+
+    expect(mockEnsure).not.toHaveBeenCalled();
+    expect(mockEmbed).not.toHaveBeenCalled();
+    expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  it("stops before embedding when cancellation is raised after collection check", async () => {
+    const token = new CancellationToken();
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    mockEnsure.mockImplementation(async () => {
+      token.cancel();
+    });
+
+    const result = saveMemoryForImport(
+      {
+        content: "cancel during import",
+        project: "MemoryMesh",
+        memory_type: "context",
+      },
+      { cancellationToken: token }
+    );
+
+    await waitForCondition(() => getMemoryStatus(result.id)?.status !== "pending");
+    expect(getMemoryStatus(result.id)?.error_code).toBe("import_interrupted");
+    expect(mockEmbed).not.toHaveBeenCalled();
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
 

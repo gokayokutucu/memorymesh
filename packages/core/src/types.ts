@@ -37,6 +37,7 @@ export interface ISaveMemoryResult {
   error_code?:
     | "payload_too_large"
     | "embedding_input_too_large"
+    | "import_interrupted"
     | "memory_write_disabled"
     | "qdrant_transient_failure"
     | "mongo_transient_failure"

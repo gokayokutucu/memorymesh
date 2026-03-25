@@ -1,4 +1,5 @@
 import {
+  ICancellationToken,
   classifyMessage as classifyMessageShared,
   IImportCallbacks,
   IImportPolicy,
@@ -28,6 +29,7 @@ export interface IImportRunOptions {
   gateway?: IImporterGateway;
   callbacks?: Partial<IImportCallbacks>;
   showConversationProgress?: boolean;
+  cancellationToken?: ICancellationToken;
 }
 
 export interface IImportRunResult {
@@ -146,7 +148,7 @@ export async function importConversations(
     options.gateway ??
     (IMPORT_GATEWAY_MODE === "remote"
       ? createMcpImporterGateway()
-      : createRuntimeImporterGateway());
+      : createRuntimeImporterGateway(options.cancellationToken));
 
   const usesLocalRuntimeGateway = !options.gateway && IMPORT_GATEWAY_MODE !== "remote";
   if (!dryRun && usesLocalRuntimeGateway) {
@@ -239,6 +241,7 @@ export async function importConversations(
       import_policy: importPolicy,
       conversation_delay_ms: delayMs,
       callbacks,
+      cancellation_token: options.cancellationToken,
     }
   );
 

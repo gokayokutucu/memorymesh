@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { ImportInterruptedError } from "@memorymesh/core";
 import { importFromPath } from "../folder-import";
 import { IRustEngineOutput } from "../rust-engine";
 import { IScanReport } from "../folder-scan";
@@ -288,6 +289,54 @@ describe("folder-import", () => {
         { parse, importer }
       )
     ).rejects.toThrow("import failed");
+
+    expect(process.env.EMBEDDING_MODEL).toBe("nomic-embed-text");
+    expect(process.env.MEMORYMESH_EMBEDDING_MODE).toBe("flash");
+    expect(process.env.MEMORYMESH_EMBEDDING_DIMENSION).toBe("768");
+  });
+
+  it("passes a cancellation token into ts importer and restores env after interruption", async () => {
+    writeFileSync(
+      join(root, "supported.json"),
+      JSON.stringify([{ mapping: { a: {} }, current_node: "a" }]),
+      "utf-8"
+    );
+    process.env.EMBEDDING_MODEL = "nomic-embed-text";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "flash";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "768";
+
+    const parse = jest.fn(() => [
+      { title: "c1", messages: [{ role: "assistant", content: "x" }] },
+    ]);
+    const importer = jest.fn(async (_conversations, _project, _dryRun, options) => {
+      expect(options?.cancellationToken?.isCancelled).toBe(false);
+      process.emit("SIGINT", "SIGINT");
+      expect(options?.cancellationToken?.isCancelled).toBe(true);
+      options?.cancellationToken?.throwIfCancelled();
+      return {
+        totalConversations: 1,
+        saved: 1,
+        skipped: 0,
+        skippedReasons: {},
+      };
+    });
+
+    await expect(
+      importFromPath(
+        root,
+        {
+          project: "MemoryMesh",
+          dryRun: false,
+          delayMs: 0,
+          runtimeEnv: {
+            EMBEDDING_MODEL: "mxbai-embed-large",
+            MEMORYMESH_EMBEDDING_MODE: "medium",
+            MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+          },
+        },
+        { parse, importer }
+      )
+    ).rejects.toBeInstanceOf(ImportInterruptedError);
 
     expect(process.env.EMBEDDING_MODEL).toBe("nomic-embed-text");
     expect(process.env.MEMORYMESH_EMBEDDING_MODE).toBe("flash");

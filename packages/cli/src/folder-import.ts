@@ -1,5 +1,9 @@
 import { parseConversations, importConversations, IImportRunOptions } from "./gpt-importer";
-import { IGptConversation } from "@memorymesh/core";
+import {
+  CancellationToken,
+  IGptConversation,
+  ImportInterruptedError,
+} from "@memorymesh/core";
 import { JsonFileCategory } from "./json-shape-classifier";
 import { IScanReport, scanJsonInputPath } from "./folder-scan";
 import { IRustEngineOutput, runRustImporterEngine } from "./rust-engine";
@@ -80,22 +84,6 @@ interface IRunPositionState {
   ref_id?: string;
   checkpoint_key?: string;
   checkpoint_next_message_count?: number;
-}
-
-class ImportInterruptedError extends Error {
-  readonly signal?: NodeJS.Signals;
-  readonly reason: "signal" | "debug_stop";
-
-  constructor(reason: "signal" | "debug_stop", signal?: NodeJS.Signals) {
-    super(
-      reason === "signal"
-        ? `Import interrupted by ${signal ?? "signal"}`
-        : "Import interrupted by debug stop threshold"
-    );
-    this.name = "ImportInterruptedError";
-    this.signal = signal;
-    this.reason = reason;
-  }
 }
 
 const PROGRESS_LINE_COUNT = 3;
@@ -377,9 +365,11 @@ export async function importFromPath(
   let completedMessageOutcomes = 0;
   let interruptionRequested = false;
   let interruptionSignal: NodeJS.Signals | undefined;
+  const cancellationToken = new CancellationToken();
   const onInterruptSignal = (signal: NodeJS.Signals): void => {
     interruptionRequested = true;
     interruptionSignal = signal;
+    cancellationToken.cancel();
   };
   process.on("SIGINT", onInterruptSignal);
   process.on("SIGTERM", onInterruptSignal);
@@ -493,7 +483,7 @@ export async function importFromPath(
   };
 
   const assertRunNotInterrupted = (): void => {
-    if (interruptionRequested) {
+    if (interruptionRequested || cancellationToken.isCancelled) {
       throw new ImportInterruptedError("signal", interruptionSignal);
     }
     if (
@@ -562,6 +552,7 @@ export async function importFromPath(
             verbose: false,
             showConversationProgress: false,
             importPolicy: options.importPolicy,
+            cancellationToken,
             callbacks: {
             onConversationStart: (context) => {
               void notifyImportStarted();
