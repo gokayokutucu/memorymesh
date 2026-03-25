@@ -28,6 +28,7 @@ import {
 } from "./types";
 
 const saveStatusRegistry = new Map<string, ISaveMemoryStatus>();
+const activeBackgroundSaveTasks = new Set<Promise<void>>();
 const permissionLogState = {
   readDisabledLogged: false,
   writeDisabledLogged: false,
@@ -61,6 +62,14 @@ export function saveMemoryForImport(
 
 export function getMemoryStatus(id: string): ISaveMemoryStatus | null {
   return memoryService.getMemoryStatus(id) as ISaveMemoryStatus | null;
+}
+
+export async function waitForBackgroundSaveTasks(): Promise<void> {
+  const tasks = Array.from(activeBackgroundSaveTasks);
+  if (tasks.length === 0) {
+    return;
+  }
+  await Promise.allSettled(tasks);
 }
 
 export async function searchMemory(
@@ -156,7 +165,7 @@ function saveMemoryInternal(
     neo4j_saved: false,
   });
 
-  (async () => {
+  const backgroundTask = (async () => {
     try {
       options?.cancellationToken?.throwIfCancelled();
       await ensureCollection();
@@ -205,8 +214,16 @@ function saveMemoryInternal(
       console.error("[memorymesh] background save failed:", error);
     }
   })();
+  trackBackgroundSaveTask(backgroundTask);
 
   return { id, status: "pending" };
+}
+
+function trackBackgroundSaveTask(task: Promise<void>): void {
+  activeBackgroundSaveTasks.add(task);
+  task.finally(() => {
+    activeBackgroundSaveTasks.delete(task);
+  });
 }
 
 function getMemoryStatusInternal(id: string): ISaveMemoryStatus | null {

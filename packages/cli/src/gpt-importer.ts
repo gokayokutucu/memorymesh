@@ -12,7 +12,10 @@ import {
   importConversations as runImportConversations,
   ISaveMemoryInput,
 } from "@memorymesh/core";
-import { createRuntimeImporterGateway, ensureEmbeddingModelAvailable } from "@memorymesh/runtime";
+import {
+  createRuntimeImporterGateway,
+  ensureEmbeddingModelAvailable,
+} from "@memorymesh/runtime";
 
 interface IMcpToolResponse {
   result?: {
@@ -232,18 +235,25 @@ export async function importConversations(
     },
   };
 
-  const result: IImportResult = await runImportConversations(
-    conversations,
-    project,
-    dryRun,
-    gateway,
-    {
-      import_policy: importPolicy,
-      conversation_delay_ms: delayMs,
-      callbacks,
-      cancellation_token: options.cancellationToken,
+  let result: IImportResult;
+  try {
+    result = await runImportConversations(
+      conversations,
+      project,
+      dryRun,
+      gateway,
+      {
+        import_policy: importPolicy,
+        conversation_delay_ms: delayMs,
+        callbacks,
+        cancellation_token: options.cancellationToken,
+      }
+    );
+  } finally {
+    if (!dryRun && usesLocalRuntimeGateway) {
+      await waitForRuntimeBackgroundSaveTasks();
     }
-  );
+  }
 
   return {
     totalConversations: result.total_conversations,
@@ -251,6 +261,15 @@ export async function importConversations(
     skipped: result.skipped,
     skippedReasons: result.skipped_reasons,
   };
+}
+
+async function waitForRuntimeBackgroundSaveTasks(): Promise<void> {
+  const runtime = (await import("@memorymesh/runtime")) as {
+    waitForBackgroundSaveTasks?: () => Promise<void>;
+  };
+  if (typeof runtime.waitForBackgroundSaveTasks === "function") {
+    await runtime.waitForBackgroundSaveTasks();
+  }
 }
 
 function truncateTitle(value: string, maxLength: number): string {

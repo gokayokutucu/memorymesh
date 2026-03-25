@@ -5,6 +5,7 @@ import {
   getRelatedMemories,
   saveMemory,
   saveMemoryForImport,
+  waitForBackgroundSaveTasks,
   searchMemory,
   getProjects,
 } from "../memory";
@@ -237,6 +238,36 @@ describe("saveMemoryForImport cancellation", () => {
     expect(mockSave).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
+  });
+
+  it("waitForBackgroundSaveTasks waits until active background saves settle", async () => {
+    let releaseSave: (() => void) | undefined;
+    mockSave.mockImplementation(
+      async () =>
+        new Promise<string>((resolve) => {
+          releaseSave = () => resolve("id-delayed");
+        })
+    );
+
+    const result = saveMemoryForImport({
+      content: "delayed save",
+      project: "MemoryMesh",
+      memory_type: "context",
+    });
+
+    await waitForCondition(() => mockSave.mock.calls.length === 1);
+    expect(getMemoryStatus(result.id)?.status).toBe("pending");
+
+    const waitPromise = waitForBackgroundSaveTasks();
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(getMemoryStatus(result.id)?.status).toBe("pending");
+
+    if (releaseSave) {
+      releaseSave();
+    }
+    await waitPromise;
+    await waitForCondition(() => getMemoryStatus(result.id)?.status !== "pending");
+    expect(getMemoryStatus(result.id)?.status).toBe("saved");
   });
 });
 
