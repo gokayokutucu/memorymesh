@@ -26,3 +26,4 @@ export * from "./main";
 export * from "./terminal-style";
 export * from "./ui/installer-ui";
 export * from "./ui/runtime-menu";
+export * from "./ui/wizard";
