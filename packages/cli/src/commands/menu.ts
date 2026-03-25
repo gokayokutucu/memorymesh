@@ -16,6 +16,7 @@ import {
 import { IFileSystem, nodeFileSystem } from "../system/filesystem";
 import { resolveUserHomeDir } from "../system/runtime-home";
 import { ClackRuntimeMenuUi, IRuntimeMenuUi } from "../ui/runtime-menu";
+import { runWizard, WizardStep } from "../ui/wizard";
 
 export interface IRuntimeMenuDeps {
   ui: IRuntimeMenuUi;
@@ -46,86 +47,148 @@ async function handleImportChatGptAction(
   readLastImportPath: (homeDir: string) => Promise<string | null>,
   persistLastImportPath: (homeDir: string, inputPath: string) => Promise<void>
 ): Promise<number> {
-  let resolvedPath = await detectImportPath(homeDir);
-  if (!resolvedPath) {
-    const lastStartedImportPath = await readLastImportPath(homeDir);
-    const pathPromptMessage = lastStartedImportPath
-      ? "Path to ChatGPT export file/folder (Tab to accept)"
-      : "Path to ChatGPT export file/folder";
-    while (!resolvedPath) {
-      const pathResult = await ui.promptInput({
-        label: pathPromptMessage,
-        placeholder: lastStartedImportPath ?? "~/Downloads/chatgpt-export.json",
-        tabCycleValues: lastStartedImportPath ? [lastStartedImportPath] : undefined,
-        required: true,
-      });
-      if (pathResult.status === "cancel") {
-        await ui.note("Import cancelled.");
-        return 0;
-      }
-      if (pathResult.status !== "submit") {
-        continue;
-      }
-      resolvedPath = expandHomePath(pathResult.value, homeDir);
-    }
-  } else {
-    await ui.note(`Auto-detected ChatGPT export: ${resolvedPath}`);
-  }
-
   const defaultProject = "MemoryMesh";
   const defaultEngine = "rust";
   const defaultPolicy = "skip_existing";
+  const detectedPath = await detectImportPath(homeDir);
+  const lastStartedImportPath = detectedPath
+    ? null
+    : await readLastImportPath(homeDir);
 
-  const projectResult = await ui.promptInput({
-    label: `Project (default: ${defaultProject})`,
-    placeholder: defaultProject,
-    defaultValue: defaultProject,
-    required: false,
-  });
-  if (projectResult.status === "cancel") {
+  const steps: WizardStep[] = [
+    {
+      id: "path",
+      run: async () => {
+        if (detectedPath) {
+          await ui.note(`Auto-detected ChatGPT export: ${detectedPath}`);
+          return {
+            type: "next",
+            data: { path: detectedPath },
+          };
+        }
+
+        const pathPromptMessage = lastStartedImportPath
+          ? "Path to ChatGPT export file/folder (Tab to accept)"
+          : "Path to ChatGPT export file/folder";
+        while (true) {
+          const pathResult = await ui.promptInput({
+            label: pathPromptMessage,
+            placeholder: lastStartedImportPath ?? "~/Downloads/chatgpt-export.json",
+            tabCycleValues: lastStartedImportPath ? [lastStartedImportPath] : undefined,
+            required: true,
+          });
+          if (pathResult.status === "cancel") {
+            return { type: "cancel" };
+          }
+          if (pathResult.status !== "submit") {
+            continue;
+          }
+          return {
+            type: "next",
+            data: {
+              path: expandHomePath(pathResult.value, homeDir),
+            },
+          };
+        }
+      },
+    },
+    {
+      id: "project",
+      run: async () => {
+        const projectResult = await ui.promptInput({
+          label: `Project (default: ${defaultProject})`,
+          placeholder: defaultProject,
+          defaultValue: defaultProject,
+          required: false,
+        });
+        if (projectResult.status === "cancel") {
+          return { type: "cancel" };
+        }
+        if (projectResult.status !== "submit") {
+          return { type: "cancel" };
+        }
+        return {
+          type: "next",
+          data: {
+            project: projectResult.value || defaultProject,
+          },
+        };
+      },
+    },
+    {
+      id: "engine",
+      run: async () => {
+        const engineResult = await ui.promptInput({
+          label: `Engine (ts|rust, default: ${defaultEngine})`,
+          placeholder: defaultEngine,
+          defaultValue: defaultEngine,
+          tabCycleValues: ["rust", "ts"],
+          required: false,
+        });
+        if (engineResult.status === "cancel") {
+          return { type: "cancel" };
+        }
+        if (engineResult.status !== "submit") {
+          return { type: "cancel" };
+        }
+        return {
+          type: "next",
+          data: {
+            engine: engineResult.value === "ts" ? "ts" : "rust",
+          },
+        };
+      },
+    },
+    {
+      id: "import_policy",
+      run: async () => {
+        const importPolicyResult = await ui.promptInput({
+          label: `Import policy (skip_existing|import_anyway|overwrite_existing, default: ${defaultPolicy})`,
+          placeholder: defaultPolicy,
+          defaultValue: defaultPolicy,
+          tabCycleValues: [
+            "skip_existing",
+            "import_anyway",
+            "overwrite_existing",
+          ],
+          required: false,
+        });
+        if (importPolicyResult.status === "cancel") {
+          return { type: "cancel" };
+        }
+        if (importPolicyResult.status !== "submit") {
+          return { type: "cancel" };
+        }
+        const importPolicyRaw = importPolicyResult.value;
+        return {
+          type: "next",
+          data: {
+            importPolicy:
+              importPolicyRaw === "import_anyway" || importPolicyRaw === "overwrite_existing"
+                ? importPolicyRaw
+                : "skip_existing",
+          },
+        };
+      },
+    },
+  ];
+
+  const wizardResult = await runWizard(steps);
+  if (!wizardResult) {
     await ui.note("Import cancelled.");
     return 0;
   }
-  const project = projectResult.status === "submit" && projectResult.value
-    ? projectResult.value
+  const resolvedPath = typeof wizardResult.data.path === "string"
+    ? wizardResult.data.path
+    : "";
+  const project = typeof wizardResult.data.project === "string"
+    ? wizardResult.data.project
     : defaultProject;
-
-  const engineResult = await ui.promptInput({
-    label: `Engine (ts|rust, default: ${defaultEngine})`,
-    placeholder: defaultEngine,
-    defaultValue: defaultEngine,
-    tabCycleValues: ["rust", "ts"],
-    required: false,
-  });
-  if (engineResult.status === "cancel") {
-    await ui.note("Import cancelled.");
-    return 0;
-  }
-  const engineInput = engineResult.status === "submit" ? engineResult.value : defaultEngine;
-  const engine = engineInput === "ts" ? "ts" : "rust";
-
-  const importPolicyResult = await ui.promptInput({
-    label: `Import policy (skip_existing|import_anyway|overwrite_existing, default: ${defaultPolicy})`,
-    placeholder: defaultPolicy,
-    defaultValue: defaultPolicy,
-    tabCycleValues: [
-      "skip_existing",
-      "import_anyway",
-      "overwrite_existing",
-    ],
-    required: false,
-  });
-  if (importPolicyResult.status === "cancel") {
-    await ui.note("Import cancelled.");
-    return 0;
-  }
-  const importPolicyRaw = importPolicyResult.status === "submit"
-    ? importPolicyResult.value
-    : defaultPolicy;
-  const importPolicy =
-    importPolicyRaw === "import_anyway" || importPolicyRaw === "overwrite_existing"
-      ? importPolicyRaw
-      : "skip_existing";
+  const engine = wizardResult.data.engine === "ts" ? "ts" : "rust";
+  const importPolicy = wizardResult.data.importPolicy === "import_anyway"
+    || wizardResult.data.importPolicy === "overwrite_existing"
+    ? wizardResult.data.importPolicy
+    : "skip_existing";
 
   await ui.note(
     `Starting import with project=${project}, engine=${engine}, importPolicy=${importPolicy}.`

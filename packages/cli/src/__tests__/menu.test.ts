@@ -338,6 +338,26 @@ describe("runtime menu", () => {
     expect(mockedRunImportGptCommand).not.toHaveBeenCalled();
   });
 
+  it("cancels entire import flow when project prompt is cancelled", async () => {
+    const ui = new FakeUi(["import_chatgpt", "exit"], [
+      "/tmp/home/Downloads/final.json",
+      null,
+    ]);
+    const detectImportPath = jest.fn<Promise<string | null>, [string]>().mockResolvedValue(null);
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+      detectImportPath,
+      readLastImportPath: mockedReadLastImportPath,
+      persistLastImportPath: mockedPersistLastImportPath,
+    });
+
+    expect(ui.notes).toContain("Import cancelled.");
+    expect(mockedRunImportGptCommand).not.toHaveBeenCalled();
+  });
+
   it("cancels entire import flow when engine prompt is cancelled", async () => {
     const ui = new FakeUi(["import_chatgpt", "exit"], [
       "/tmp/home/Downloads/final.json",
