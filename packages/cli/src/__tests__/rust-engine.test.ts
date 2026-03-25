@@ -103,4 +103,45 @@ describe("rust-engine", () => {
       "Rust importer engine output does not match expected contract"
     );
   });
+
+  it("passes explicit runtime env to rust engine process", async () => {
+    mockedExecFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        options: { env?: NodeJS.ProcessEnv },
+        callback: (error: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        expect(options.env?.EMBEDDING_MODEL).toBe("mxbai-embed-large");
+        expect(options.env?.MEMORYMESH_EMBEDDING_MODE).toBe("medium");
+        expect(options.env?.MEMORYMESH_EMBEDDING_DIMENSION).toBe("1024");
+        callback(
+          null,
+          JSON.stringify({
+            scan_summary: {
+              scanned_json_files: 0,
+              supported_conversation_file: 0,
+              unsupported_conversation_schema: 0,
+              ignorable_json: 0,
+              unknown_json: 0,
+              invalid_json: 0,
+            },
+            files: [],
+          }),
+          ""
+        );
+      }
+    );
+
+    await expect(
+      runRustImporterEngine("/tmp/in", "/tmp/bin", {
+        EMBEDDING_MODEL: "mxbai-embed-large",
+        MEMORYMESH_EMBEDDING_MODE: "medium",
+        MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+      })
+    ).resolves.toMatchObject({
+      scan_summary: { scanned_json_files: 0 },
+      files: [],
+    });
+  });
 });

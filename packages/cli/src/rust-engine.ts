@@ -30,14 +30,15 @@ interface IExecResult {
 
 export async function runRustImporterEngine(
   inputPath: string,
-  binaryPath?: string
+  binaryPath?: string,
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<IRustEngineOutput> {
   const rustBinary =
     binaryPath ??
     process.env.MEMORYMESH_RUST_ENGINE_BIN ??
     resolveDefaultRustBinaryPath();
 
-  const result = await execFileAsync(rustBinary, [inputPath]);
+  const result = await execFileAsync(rustBinary, [inputPath], env);
 
   let parsed: unknown;
   try {
@@ -53,29 +54,38 @@ export async function runRustImporterEngine(
   return parsed;
 }
 
-function execFileAsync(command: string, args: string[]): Promise<IExecResult> {
+function execFileAsync(
+  command: string,
+  args: string[],
+  env: NodeJS.ProcessEnv
+): Promise<IExecResult> {
   return new Promise((resolvePromise, reject) => {
-    execFile(command, args, { maxBuffer: 128 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    execFile(
+      command,
+      args,
+      { maxBuffer: 128 * 1024 * 1024, env },
+      (error, stdout, stderr) => {
+        if (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            reject(
+              new Error(
+                `Rust importer engine binary not found: ${command}. Build it with: cargo build --manifest-path native/importer-engine/Cargo.toml`
+              )
+            );
+            return;
+          }
+
           reject(
             new Error(
-              `Rust importer engine binary not found: ${command}. Build it with: cargo build --manifest-path native/importer-engine/Cargo.toml`
+              `Rust importer engine failed: ${error.message}${stderr ? `\n${stderr}` : ""}`
             )
           );
           return;
         }
 
-        reject(
-          new Error(
-            `Rust importer engine failed: ${error.message}${stderr ? `\n${stderr}` : ""}`
-          )
-        );
-        return;
+        resolvePromise({ stdout, stderr });
       }
-
-      resolvePromise({ stdout, stderr });
-    });
+    );
   });
 }
 

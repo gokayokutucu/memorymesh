@@ -9,8 +9,15 @@ import {
 import { resetRuntimeHealthForTests } from "../health";
 
 describe("resilience", () => {
+  let consoleWarnSpy: jest.SpyInstance;
+
   beforeEach(() => {
+    consoleWarnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
     resetRuntimeHealthForTests();
+  });
+
+  afterEach(() => {
+    consoleWarnSpy.mockRestore();
   });
 
   it("computes deterministic backoff when jitter is disabled", () => {

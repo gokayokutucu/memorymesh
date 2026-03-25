@@ -2,6 +2,55 @@ import {
   parseImportGptArgs,
   runImportGptCommand,
 } from "../commands/import-gpt";
+import { ICommandRunner, ICommandRunOptions, ICommandResult } from "../system/command-runner";
+
+class FakeRunner implements ICommandRunner {
+  calls: string[] = [];
+  constructor(
+    private readonly qdrantCollectionDimension: number | null = null
+  ) {}
+
+  async run(
+    command: string,
+    args: string[] = [],
+    _options?: ICommandRunOptions
+  ): Promise<ICommandResult> {
+    const key = `${command} ${args.join(" ")}`;
+    this.calls.push(key);
+
+    if (key === "curl -fsS http://localhost:6333/collections/memories") {
+      if (!this.qdrantCollectionDimension) {
+        return {
+          stdout: "",
+          stderr: "not found",
+          exitCode: 1,
+          success: false,
+        };
+      }
+      return {
+        stdout: JSON.stringify({
+          result: {
+            config: {
+              params: {
+                vectors: { size: this.qdrantCollectionDimension },
+              },
+            },
+          },
+        }),
+        stderr: "",
+        exitCode: 0,
+        success: true,
+      };
+    }
+
+    return {
+      stdout: "ok",
+      stderr: "",
+      exitCode: 0,
+      success: true,
+    };
+  }
+}
 
 describe("import-gpt command", () => {
   it("uses documented defaults when optional flags are not provided", () => {
@@ -93,9 +142,321 @@ describe("import-gpt command", () => {
     }));
     const code = await runImportGptCommand(["--path", "/tmp/export"], {
       importer,
+      resolveEmbeddingAuthority: async () => ({
+        config: {
+          embeddingMode: "flash",
+          embeddingModel: "nomic-embed-text",
+          embeddingDimension: 768,
+        } as any,
+        embedding: {
+          embeddingMode: "flash",
+          embeddingModel: "nomic-embed-text",
+          embeddingDimension: 768,
+        },
+        runtimeEnv: {
+          EMBEDDING_MODEL: "nomic-embed-text",
+          MEMORYMESH_EMBEDDING_MODE: "flash",
+          MEMORYMESH_EMBEDDING_DIMENSION: "768",
+        },
+        runtimeEnvPath: "/tmp/runtime.env",
+        runtimeEnvRegenerated: false,
+      }),
+      runner: {
+        run: async () => ({
+          stdout: "",
+          stderr: "not found",
+          exitCode: 1,
+          success: false,
+        }),
+      },
     });
 
     expect(code).toBe(0);
     expect(importer).toHaveBeenCalled();
+  });
+
+  it("passes persisted installer embedding config to import execution", async () => {
+    const previousModel = process.env.EMBEDDING_MODEL;
+    process.env.EMBEDDING_MODEL = "should-be-overridden";
+    try {
+      const importer = jest.fn(async (_inputPath, options) => {
+        expect(options.runtimeEnv?.EMBEDDING_MODEL).toBe("mxbai-embed-large");
+        expect(options.runtimeEnv?.MEMORYMESH_EMBEDDING_MODE).toBe("medium");
+        expect(options.runtimeEnv?.MEMORYMESH_EMBEDDING_DIMENSION).toBe("1024");
+        return {
+          scannedJsonFiles: 1,
+          supportedConversationFiles: 1,
+          importedConversations: 1,
+          savedMemories: 1,
+          skippedMemories: 0,
+          categories: {
+            supported_conversation_file: 1,
+            unsupported_conversation_schema: 0,
+            ignorable_json: 0,
+            unknown_json: 0,
+            invalid_json: 0,
+          },
+          skipReasons: {},
+          checkpointUsed: true,
+          resumed: false,
+          checkpointPath: "/tmp/checkpoint.json",
+          checkpointMode: "real" as const,
+          resumeSkippedMessages: 0,
+        };
+      });
+
+      const code = await runImportGptCommand(["--path", "/tmp/export"], {
+        importer,
+        runner: new FakeRunner(null),
+        resolveEmbeddingAuthority: async () => ({
+          config: {
+            installState: "installed",
+            embeddingMode: "medium",
+            embeddingModel: "mxbai-embed-large",
+            embeddingDimension: 1024,
+            installedAt: "2026-03-24T00:00:00.000Z",
+            stackProjectDir: "/tmp/home/.memorymesh/stack",
+            composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
+            stackMode: "release-image",
+          },
+          embedding: {
+            embeddingMode: "medium",
+            embeddingModel: "mxbai-embed-large",
+            embeddingDimension: 1024,
+          },
+          runtimeEnv: {
+            EMBEDDING_MODEL: "mxbai-embed-large",
+            MEMORYMESH_EMBEDDING_MODE: "medium",
+            MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+          },
+          runtimeEnvPath: "/tmp/home/.memorymesh/runtime.env",
+          runtimeEnvRegenerated: false,
+        }),
+      });
+
+      expect(code).toBe(0);
+      expect(importer).toHaveBeenCalled();
+      expect(process.env.EMBEDDING_MODEL).toBe("should-be-overridden");
+    } finally {
+      if (previousModel === undefined) {
+        delete process.env.EMBEDDING_MODEL;
+      } else {
+        process.env.EMBEDDING_MODEL = previousModel;
+      }
+      delete process.env.MEMORYMESH_EMBEDDING_MODE;
+      delete process.env.MEMORYMESH_EMBEDDING_DIMENSION;
+    }
+  });
+
+  it("hard-fails before import when embedding dimensions mismatch", async () => {
+    const runner = new FakeRunner(768);
+    const importer = jest.fn();
+    const logger = { log: jest.fn(), error: jest.fn() };
+
+    const code = await runImportGptCommand(["--path", "/tmp/export"], {
+      importer,
+      runner,
+      resolveEmbeddingAuthority: async () => ({
+        config: {
+          installState: "installed",
+          embeddingMode: "medium",
+          embeddingModel: "mxbai-embed-large",
+          embeddingDimension: 1024,
+          installedAt: "2026-03-24T00:00:00.000Z",
+          stackProjectDir: "/tmp/home/.memorymesh/stack",
+          composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
+          stackMode: "release-image",
+        },
+        embedding: {
+          embeddingMode: "medium",
+          embeddingModel: "mxbai-embed-large",
+          embeddingDimension: 1024,
+        },
+        runtimeEnv: {
+          EMBEDDING_MODEL: "mxbai-embed-large",
+          MEMORYMESH_EMBEDDING_MODE: "medium",
+          MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+        },
+        runtimeEnvPath: "/tmp/home/.memorymesh/runtime.env",
+        runtimeEnvRegenerated: false,
+      }),
+      logger,
+    });
+
+    expect(code).toBe(1);
+    expect(importer).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("Embedding mismatch detected")
+    );
+  });
+
+  it("logs resolved installer embedding config when engine=rust", async () => {
+    const importer = jest.fn(async () => ({
+      scannedJsonFiles: 1,
+      supportedConversationFiles: 1,
+      importedConversations: 1,
+      savedMemories: 1,
+      skippedMemories: 0,
+      categories: {
+        supported_conversation_file: 1,
+        unsupported_conversation_schema: 0,
+        ignorable_json: 0,
+        unknown_json: 0,
+        invalid_json: 0,
+      },
+      skipReasons: {},
+      checkpointUsed: true,
+      resumed: false,
+      checkpointPath: "/tmp/checkpoint.json",
+      checkpointMode: "real" as const,
+      resumeSkippedMessages: 0,
+    }));
+    const logger = { log: jest.fn(), error: jest.fn() };
+
+    const code = await runImportGptCommand(
+      ["--path", "/tmp/export", "--engine", "rust"],
+      {
+        importer,
+        runner: new FakeRunner(null),
+        resolveEmbeddingAuthority: async () => ({
+          config: {
+            installState: "installed",
+            embeddingMode: "medium",
+            embeddingModel: "mxbai-embed-large",
+            embeddingDimension: 1024,
+            installedAt: "2026-03-24T00:00:00.000Z",
+            stackProjectDir: "/tmp/home/.memorymesh/stack",
+            composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
+            stackMode: "release-image",
+          },
+          embedding: {
+            embeddingMode: "medium",
+            embeddingModel: "mxbai-embed-large",
+            embeddingDimension: 1024,
+          },
+          runtimeEnv: {
+            EMBEDDING_MODEL: "mxbai-embed-large",
+            MEMORYMESH_EMBEDDING_MODE: "medium",
+            MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+          },
+          runtimeEnvPath: "/tmp/home/.memorymesh/runtime.env",
+          runtimeEnvRegenerated: false,
+        }),
+        logger,
+      }
+    );
+
+    expect(code).toBe(0);
+    expect(logger.log).toHaveBeenCalledWith(
+      "Rust import embedding model resolved: mxbai-embed-large"
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      "Rust import embedding dimension resolved: 1024"
+    );
+    expect(logger.log).toHaveBeenCalledWith(
+      "Rust import embedding mode resolved: medium"
+    );
+    expect(logger.log).toHaveBeenCalledWith("Source: installer runtime config");
+  });
+
+  it("does not call onImportStarted when importer fails before real start milestone", async () => {
+    const onImportStarted = jest.fn();
+    const importer = jest.fn(async () => {
+      throw new Error("validation failed before import start");
+    });
+
+    const code = await runImportGptCommand(["--path", "/tmp/export"], {
+      importer,
+      onImportStarted,
+      runner: new FakeRunner(null),
+      resolveEmbeddingAuthority: async () => ({
+        config: {
+          installState: "installed",
+          embeddingMode: "flash",
+          embeddingModel: "nomic-embed-text",
+          embeddingDimension: 768,
+          installedAt: "2026-03-24T00:00:00.000Z",
+          stackProjectDir: "/tmp/home/.memorymesh/stack",
+          composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
+          stackMode: "release-image",
+        },
+        embedding: {
+          embeddingMode: "flash",
+          embeddingModel: "nomic-embed-text",
+          embeddingDimension: 768,
+        },
+        runtimeEnv: {
+          EMBEDDING_MODEL: "nomic-embed-text",
+          MEMORYMESH_EMBEDDING_MODE: "flash",
+          MEMORYMESH_EMBEDDING_DIMENSION: "768",
+        },
+        runtimeEnvPath: "/tmp/home/.memorymesh/runtime.env",
+        runtimeEnvRegenerated: false,
+      }),
+    });
+
+    expect(code).toBe(1);
+    expect(importer).toHaveBeenCalledTimes(1);
+    expect(onImportStarted).not.toHaveBeenCalled();
+  });
+
+  it("passes onImportStarted to importer for real start milestone trigger", async () => {
+    const onImportStarted = jest.fn();
+    const importer = jest.fn(async (_inputPath, options) => {
+      await options.onImportStarted?.();
+      return {
+        scannedJsonFiles: 1,
+        supportedConversationFiles: 1,
+        importedConversations: 1,
+        savedMemories: 1,
+        skippedMemories: 0,
+        categories: {
+          supported_conversation_file: 1,
+          unsupported_conversation_schema: 0,
+          ignorable_json: 0,
+          unknown_json: 0,
+          invalid_json: 0,
+        },
+        skipReasons: {},
+        checkpointUsed: true,
+        resumed: false,
+        checkpointPath: "/tmp/checkpoint.json",
+        checkpointMode: "real" as const,
+        resumeSkippedMessages: 0,
+      };
+    });
+
+    const code = await runImportGptCommand(["--path", "/tmp/export"], {
+      importer,
+      onImportStarted,
+      runner: new FakeRunner(null),
+      resolveEmbeddingAuthority: async () => ({
+        config: {
+          installState: "installed",
+          embeddingMode: "medium",
+          embeddingModel: "mxbai-embed-large",
+          embeddingDimension: 1024,
+          installedAt: "2026-03-24T00:00:00.000Z",
+          stackProjectDir: "/tmp/home/.memorymesh/stack",
+          composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
+          stackMode: "release-image",
+        },
+        embedding: {
+          embeddingMode: "medium",
+          embeddingModel: "mxbai-embed-large",
+          embeddingDimension: 1024,
+        },
+        runtimeEnv: {
+          EMBEDDING_MODEL: "mxbai-embed-large",
+          MEMORYMESH_EMBEDDING_MODE: "medium",
+          MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+        },
+        runtimeEnvPath: "/tmp/home/.memorymesh/runtime.env",
+        runtimeEnvRegenerated: false,
+      }),
+    });
+
+    expect(code).toBe(0);
+    expect(onImportStarted).toHaveBeenCalledTimes(1);
   });
 });

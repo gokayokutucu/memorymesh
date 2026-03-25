@@ -28,6 +28,9 @@ describe("storage resilience", () => {
       MEMORYMESH_RETRY_BASE_DELAY_MS: "0",
       MEMORYMESH_RETRY_MAX_DELAY_MS: "0",
       MEMORYMESH_RETRY_JITTER_MS: "0",
+      EMBEDDING_MODEL: "nomic-embed-text",
+      MEMORYMESH_EMBEDDING_MODE: "flash",
+      MEMORYMESH_EMBEDDING_DIMENSION: "768",
     };
   });
 
@@ -76,6 +79,24 @@ describe("storage resilience", () => {
     expect(mockGetCollections).toHaveBeenCalledTimes(1);
   });
 
+  it("creates collection with resolved embedding dimension", async () => {
+    process.env.EMBEDDING_MODEL = "mxbai-embed-large";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "medium";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "1024";
+    mockGetCollections.mockResolvedValue({ collections: [] });
+    mockCreateCollection.mockResolvedValue({ status: "ok" });
+
+    const storage = await import("../storage");
+    await storage.ensureCollection();
+
+    expect(mockCreateCollection).toHaveBeenCalledWith(
+      "memories",
+      expect.objectContaining({
+        vectors: expect.objectContaining({ size: 1024 }),
+      })
+    );
+  });
+
   it("revalidates collection cache when operation reports missing collection", async () => {
     mockSearch
       .mockRejectedValueOnce(new Error("collection does not exist"))
@@ -88,5 +109,44 @@ describe("storage resilience", () => {
     expect(results).toEqual([]);
     expect(mockSearch).toHaveBeenCalledTimes(2);
     expect(mockGetCollections).toHaveBeenCalledTimes(1);
+  });
+
+  it("recreates collection with 1024 dimension after 768->1024 config migration", async () => {
+    process.env.EMBEDDING_MODEL = "nomic-embed-text";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "flash";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "768";
+    mockGetCollections.mockResolvedValueOnce({ collections: [{ name: "memories" }] });
+
+    const storage = await import("../storage");
+    await storage.ensureCollection();
+
+    process.env.EMBEDDING_MODEL = "mxbai-embed-large";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "medium";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "1024";
+
+    mockUpsert
+      .mockRejectedValueOnce(new Error("collection does not exist"))
+      .mockResolvedValueOnce({ status: "ok" });
+    mockGetCollections.mockResolvedValueOnce({ collections: [] });
+    mockCreateCollection.mockResolvedValueOnce({ status: "ok" });
+
+    await storage.savePoint(
+      [0.1],
+      {
+        content: "migrated",
+        project: "p",
+        memory_type: "context",
+        created_at: new Date().toISOString(),
+      },
+      "point-1"
+    );
+
+    expect(mockCreateCollection).toHaveBeenCalledWith(
+      "memories",
+      expect.objectContaining({
+        vectors: expect.objectContaining({ size: 1024 }),
+      })
+    );
+    expect(mockUpsert).toHaveBeenCalledTimes(2);
   });
 });

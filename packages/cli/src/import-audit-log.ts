@@ -1,6 +1,6 @@
 import { createWriteStream, mkdirSync, WriteStream } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { resolveUserHomeDir } from "./system/runtime-home";
 
 interface IAuditRunContext {
   mode: "dry_run" | "real";
@@ -48,7 +48,7 @@ export class ImportAuditLog {
     this.directory =
       options?.directory ??
       process.env.MEMORYMESH_IMPORT_AUDIT_DIR ??
-      resolve(homedir(), ".memorymesh", "import-audit");
+      resolve(resolveUserHomeDir(process.platform, process.env), ".memorymesh", "import-audit");
     this.enabled =
       options?.enabled ?? resolveAuditEnabledByDefault(context.mode);
     this.initialize();

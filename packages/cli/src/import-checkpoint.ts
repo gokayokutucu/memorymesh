@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { IGptConversation, IImportPolicy } from "@memorymesh/core";
+import { resolveUserHomeDir } from "./system/runtime-home";
 
 const CHECKPOINT_VERSION = 1;
 
@@ -142,7 +142,7 @@ export function resolveCheckpointFilePath(
 ): string {
   const directory = resolve(
     process.env.MEMORYMESH_CHECKPOINT_DIR ??
-      join(homedir(), ".memorymesh", "checkpoints")
+      join(resolveUserHomeDir(process.platform, process.env), ".memorymesh", "checkpoints")
   );
   return join(directory, `gpt-import-${mode.replace("_", "-")}-${datasetKey}.json`);
 }

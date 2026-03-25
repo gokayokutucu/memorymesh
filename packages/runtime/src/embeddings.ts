@@ -1,30 +1,15 @@
 import { Ollama } from "ollama";
+import { resolveEmbeddingConfig } from "./embedding-config";
 
-const OLLAMA_HOST = process.env.OLLAMA_HOST ?? "localhost";
-const OLLAMA_PORT = process.env.OLLAMA_PORT ?? "11434";
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "nomic-embed-text";
-const EMBED_CHUNK_MAX_CHARS = Number.parseInt(
-  process.env.MEMORYMESH_EMBED_CHUNK_MAX_CHARS ?? "3500",
-  10
-);
-const EMBED_MAX_CONCURRENCY = Number.parseInt(
-  process.env.MEMORYMESH_EMBED_MAX_CONCURRENCY ?? "2",
-  10
-);
 const EMBED_MIN_CHUNK_CHARS = 400;
-
-const client = new Ollama({ host: `http://${OLLAMA_HOST}:${OLLAMA_PORT}` });
-let modelPreflightPromise: Promise<void> | null = null;
+const modelPreflightByTarget = new Map<string, Promise<void>>();
 
 export async function embed(text: string): Promise<number[]> {
   await ensureEmbeddingModelAvailable();
-  const maxChunkChars =
-    Number.isNaN(EMBED_CHUNK_MAX_CHARS) || EMBED_CHUNK_MAX_CHARS <= 0
-      ? 3500
-      : EMBED_CHUNK_MAX_CHARS;
+  const maxChunkChars = getMaxChunkChars();
   const chunks = splitIntoChunks(text, maxChunkChars);
   if (chunks.length <= 1) {
-    return embedChunk(chunks[0] ?? text);
+    return embedChunkWithFallback(chunks[0] ?? text, maxChunkChars);
   }
 
   const vectors = await mapWithConcurrency(chunks, getMaxConcurrency(), async (chunk) =>
@@ -34,51 +19,60 @@ export async function embed(text: string): Promise<number[]> {
 }
 
 export async function ensureEmbeddingModelAvailable(): Promise<void> {
-  if (modelPreflightPromise) {
-    return modelPreflightPromise;
+  const key = getPreflightKey();
+  const existing = modelPreflightByTarget.get(key);
+  if (existing) {
+    return existing;
   }
 
-  modelPreflightPromise = verifyEmbeddingModelAvailability().catch((error) => {
-    modelPreflightPromise = null;
+  const task = verifyEmbeddingModelAvailability().catch((error) => {
+    modelPreflightByTarget.delete(key);
     throw error;
   });
-  return modelPreflightPromise;
+  modelPreflightByTarget.set(key, task);
+  return task;
+}
+
+export function resetEmbeddingPreflightForTests(): void {
+  modelPreflightByTarget.clear();
 }
 
 async function verifyEmbeddingModelAvailability(): Promise<void> {
+  const { embeddingModel } = resolveEmbeddingConfig();
+  const { hostLabel, client } = getOllamaClient();
   let modelList: unknown;
   try {
     modelList = await client.list();
   } catch (error) {
     throw toPreflightError(
       "ollama_unreachable",
-      `Ollama endpoint http://${OLLAMA_HOST}:${OLLAMA_PORT} is unreachable while checking embedding model "${EMBEDDING_MODEL}".`,
+      `Ollama endpoint ${hostLabel} is unreachable while checking embedding model "${embeddingModel}".`,
       error
     );
   }
 
   const availableModels = extractModelNames(modelList);
   const modelExists = availableModels.some((candidate) =>
-    matchesConfiguredModel(candidate, EMBEDDING_MODEL)
+    matchesConfiguredModel(candidate, embeddingModel)
   );
   if (modelExists) {
     return;
   }
 
   const modelSummary =
-    availableModels.length > 0
-      ? availableModels.slice(0, 10).join(", ")
-      : "none";
+    availableModels.length > 0 ? availableModels.slice(0, 10).join(", ") : "none";
   throw toPreflightError(
     "embedding_model_missing",
-    `Ollama is reachable at http://${OLLAMA_HOST}:${OLLAMA_PORT} but embedding model "${EMBEDDING_MODEL}" is missing. Available models: ${modelSummary}. Run "ollama pull ${EMBEDDING_MODEL}" or use docker compose bootstrap.`,
+    `Ollama is reachable at ${hostLabel} but embedding model "${embeddingModel}" is missing. Available models: ${modelSummary}. Run "ollama pull ${embeddingModel}" or use docker compose bootstrap.`,
     modelList
   );
 }
 
 async function embedChunk(text: string): Promise<number[]> {
+  const { embeddingModel } = resolveEmbeddingConfig();
+  const { client } = getOllamaClient();
   const response = await client.embeddings({
-    model: EMBEDDING_MODEL,
+    model: embeddingModel,
     prompt: text,
   });
   return response.embedding;
@@ -137,10 +131,42 @@ async function mapWithConcurrency<TInput, TOutput>(
 }
 
 function getMaxConcurrency(): number {
-  if (Number.isNaN(EMBED_MAX_CONCURRENCY) || EMBED_MAX_CONCURRENCY <= 0) {
+  const raw = Number.parseInt(
+    process.env.MEMORYMESH_EMBED_MAX_CONCURRENCY ?? "2",
+    10
+  );
+  if (Number.isNaN(raw) || raw <= 0) {
     return 2;
   }
-  return Math.min(8, EMBED_MAX_CONCURRENCY);
+  return Math.min(8, raw);
+}
+
+function getMaxChunkChars(): number {
+  const raw = Number.parseInt(
+    process.env.MEMORYMESH_EMBED_CHUNK_MAX_CHARS ?? "3500",
+    10
+  );
+  if (Number.isNaN(raw) || raw <= 0) {
+    return 3500;
+  }
+  return raw;
+}
+
+function getOllamaClient(): { hostLabel: string; client: Ollama } {
+  const host = process.env.OLLAMA_HOST?.trim() || "localhost";
+  const port = process.env.OLLAMA_PORT?.trim() || "11434";
+  const hostLabel = `http://${host}:${port}`;
+  return {
+    hostLabel,
+    client: new Ollama({ host: hostLabel }),
+  };
+}
+
+function getPreflightKey(): string {
+  const { embeddingModel } = resolveEmbeddingConfig();
+  const host = process.env.OLLAMA_HOST?.trim() || "localhost";
+  const port = process.env.OLLAMA_PORT?.trim() || "11434";
+  return `${host}:${port}:${embeddingModel}`;
 }
 
 function splitIntoChunks(text: string, maxChars: number): string[] {
@@ -190,8 +216,7 @@ function meanPool(vectors: number[][]): number[] {
 }
 
 function isContextLengthError(error: unknown): boolean {
-  const message =
-    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  const message = normalizeEmbeddingErrorText(error).toLowerCase();
   return (
     message.includes("context length") ||
     message.includes("input length exceeds") ||
@@ -255,4 +280,81 @@ function toPreflightError(code: string, message: string, cause?: unknown): Error
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function normalizeEmbeddingErrorText(error: unknown): string {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+
+  const addText = (value: unknown): void => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim();
+    if (normalized.length > 0) {
+      parts.push(normalized);
+    }
+  };
+
+  const walk = (value: unknown, depth: number): void => {
+    if (depth > 3 || value === null || value === undefined) {
+      return;
+    }
+    if (seen.has(value)) {
+      return;
+    }
+
+    if (typeof value === "string") {
+      addText(value);
+      return;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      addText(String(value));
+      return;
+    }
+    if (value instanceof Error) {
+      seen.add(value);
+      addText(value.name);
+      addText(value.message);
+      walk((value as Error & { cause?: unknown }).cause, depth + 1);
+      return;
+    }
+    if (Array.isArray(value)) {
+      seen.add(value);
+      for (const item of value) {
+        walk(item, depth + 1);
+      }
+      return;
+    }
+    if (!isRecord(value)) {
+      addText(String(value));
+      return;
+    }
+
+    seen.add(value);
+    const preferredKeys = [
+      "message",
+      "name",
+      "error",
+      "statusText",
+      "status",
+      "code",
+      "type",
+      "cause",
+      "body",
+      "response",
+      "details",
+    ];
+    for (const key of preferredKeys) {
+      if (key in value) {
+        walk(value[key], depth + 1);
+      }
+    }
+  };
+
+  walk(error, 0);
+  if (parts.length === 0) {
+    addText(String(error));
+  }
+  return parts.join(" | ");
 }

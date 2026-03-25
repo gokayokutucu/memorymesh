@@ -1,5 +1,6 @@
 export * from "./types";
 export * from "./config";
+export * from "./embedding-config";
 export * from "./memory";
 export * from "./embeddings";
 export * from "./orchestrator";
