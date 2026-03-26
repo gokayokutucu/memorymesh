@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import {
   detectLatestChatGptExportPath,
   expandHomePath,
@@ -10,28 +9,20 @@ import { runMcpCommand } from "./mcp";
 import { ExecaCommandRunner, ICommandRunner } from "../system/command-runner";
 import { persistInstallConfig, readInstallConfig } from "../installer/first-run";
 import {
-  mapEmbeddingModeToModel,
   mapEmbeddingModeToDimension,
   readInstallerRuntimeEnv,
   writeInstallerRuntimeEnv,
 } from "../installer/runtime-config";
 import { detectQdrantCollectionDimension } from "../installer/qdrant-dimension";
-import {
-  IEmbeddingMismatchFlowResult,
-  runEmbeddingMismatchFlow,
-} from "../installer/embedding-mismatch-flow";
-import {
-  ensureInstallerManagedStack,
-  getInstallerHomeDir,
-  getInstallerManagedComposePath,
-  getInstallerManagedStackDir,
-} from "../installer/stack-packaging";
+import { runEmbeddingMismatchFlow } from "../installer/embedding-mismatch-flow";
+import { resolveInstallerManagedStack } from "../installer/stack-packaging";
 import { IFileSystem, nodeFileSystem } from "../system/filesystem";
 import { resolveUserHomeDir } from "../system/runtime-home";
 import { ClackRuntimeMenuUi, IRuntimeMenuUi } from "../ui/runtime-menu";
 import { runWizard, WizardStep } from "../ui/wizard";
-import { downMemoryMeshStack } from "../system/docker";
+import { downMemoryMeshStack, startMemoryMeshStack } from "../system/docker";
 import { IStackContext } from "../system/stack-context";
+import { resolveAuthoritativeEmbeddingConfig } from "../installer/embedding-authority";
 
 export interface IRuntimeMenuDeps {
   ui: IRuntimeMenuUi;
@@ -282,7 +273,6 @@ async function handleSearchAction(ui: IRuntimeMenuUi): Promise<number> {
 
 async function handleSettingsAction(
   ui: IRuntimeMenuUi,
-  runner: ICommandRunner,
   homeDir: string,
   fs: IFileSystem
 ): Promise<number> {
@@ -311,52 +301,10 @@ async function handleSettingsAction(
   const nextConfig = {
     ...installConfig,
     embeddingMode: selectedMode,
-    embeddingModel: mapEmbeddingModeToModel(selectedMode),
+    embeddingModel:
+      selectedMode === "flash" ? "nomic-embed-text" : "mxbai-embed-large",
     embeddingDimension: mapEmbeddingModeToDimension(selectedMode),
   };
-
-  const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
-  const existingDimension = await detectQdrantCollectionDimension(runner, collectionName);
-  let mismatchResult: IEmbeddingMismatchFlowResult;
-  try {
-    mismatchResult = await runEmbeddingMismatchFlow({
-      existingDimension,
-      selectedDimension: nextConfig.embeddingDimension,
-      selectedMode: nextConfig.embeddingMode,
-      selectedModel: nextConfig.embeddingModel,
-      ui,
-      onApprovedReset: async () => {
-        await ui.note("Selected model requires reset of existing embedding data.");
-        await ui.note("Resetting MemoryMesh state...");
-        const composeFilePath = getInstallerManagedComposePath(homeDir);
-        if (fs.exists(composeFilePath)) {
-          const stackContext: IStackContext = {
-            projectDir: getInstallerManagedStackDir(homeDir),
-            composeFilePath,
-          };
-          const downResult = await downMemoryMeshStack(runner, stackContext, true);
-          if (!downResult.ok) {
-            throw new Error(`Unable to reset managed state for new embedding model: ${downResult.message}`);
-          }
-        }
-
-        await rm(getInstallerHomeDir(homeDir), { recursive: true, force: true });
-        await ensureInstallerManagedStack(homeDir, fs, {
-          cwd: process.cwd(),
-          env: process.env,
-        });
-        await ui.note("Reset complete. Continuing with new embedding model.");
-      },
-    });
-  } catch (error) {
-    await ui.note(String(error));
-    return 1;
-  }
-
-  if (mismatchResult.status === "rejected" || mismatchResult.status === "cancelled") {
-    await ui.note("No settings changes applied.");
-    return 0;
-  }
 
   await persistInstallConfig(
     homeDir,
@@ -376,9 +324,64 @@ async function handleSettingsAction(
   await ui.note(`Derived embeddingModel=${nextConfig.embeddingModel}.`);
   await ui.note(`Derived embeddingDimension=${nextConfig.embeddingDimension}.`);
   await ui.note(
-    "Restart services to apply embedding changes. If model is missing, rerun setup to pull it."
+    "Embedding model updated. If incompatible with existing data, you will be prompted to reset when starting an action."
   );
   return 0;
+}
+
+async function ensureEmbeddingCompatibilityOrReset(
+  ui: IRuntimeMenuUi,
+  runner: ICommandRunner,
+  homeDir: string,
+  fs: IFileSystem
+): Promise<boolean> {
+  try {
+    const authority = await resolveAuthoritativeEmbeddingConfig(homeDir, fs);
+    const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
+    const existingDimension = await detectQdrantCollectionDimension(runner, collectionName);
+    const mismatchResult = await runEmbeddingMismatchFlow({
+      existingDimension,
+      selectedDimension: authority.embedding.embeddingDimension,
+      selectedMode: authority.embedding.embeddingMode,
+      selectedModel: authority.embedding.embeddingModel,
+      ui,
+      onApprovedReset: async () => {
+        await ui.note("Embedding mismatch detected. Reset required.");
+        await ui.note("Resetting MemoryMesh state...");
+
+        const stackContext: IStackContext = resolveInstallerManagedStack(homeDir, fs) ?? {
+          projectDir: authority.config.stackProjectDir,
+          composeFilePath: authority.config.composeFilePath,
+        };
+        const downResult = await downMemoryMeshStack(runner, stackContext, true);
+        if (!downResult.ok) {
+          throw new Error(downResult.message);
+        }
+
+        const startResult = await startMemoryMeshStack(
+          runner,
+          stackContext,
+          authority.runtimeEnv,
+          authority.config.stackMode ?? "release-image"
+        );
+        if (!startResult.ok) {
+          throw new Error(startResult.message);
+        }
+
+        await ui.note("Reset complete. Continuing action.");
+      },
+    });
+
+    if (mismatchResult.status === "rejected" || mismatchResult.status === "cancelled") {
+      await ui.note("Action cancelled.");
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    await ui.note(String(error));
+    return false;
+  }
 }
 
 export async function runRuntimeMenu(
@@ -396,6 +399,15 @@ export async function runRuntimeMenu(
     }
 
     if (action === "import_chatgpt") {
+      const ready = await ensureEmbeddingCompatibilityOrReset(
+        resolved.ui,
+        resolved.runner,
+        resolved.homeDir,
+        resolved.fs
+      );
+      if (!ready) {
+        continue;
+      }
       await handleImportChatGptAction(
         resolved.ui,
         resolved.homeDir,
@@ -407,6 +419,15 @@ export async function runRuntimeMenu(
     }
 
     if (action === "import_documents") {
+      const ready = await ensureEmbeddingCompatibilityOrReset(
+        resolved.ui,
+        resolved.runner,
+        resolved.homeDir,
+        resolved.fs
+      );
+      if (!ready) {
+        continue;
+      }
       await resolved.ui.note(
         "Document import is not implemented yet. This will be wired in a later phase."
       );
@@ -414,6 +435,15 @@ export async function runRuntimeMenu(
     }
 
     if (action === "search_memories") {
+      const ready = await ensureEmbeddingCompatibilityOrReset(
+        resolved.ui,
+        resolved.runner,
+        resolved.homeDir,
+        resolved.fs
+      );
+      if (!ready) {
+        continue;
+      }
       await handleSearchAction(resolved.ui);
       continue;
     }
@@ -421,7 +451,6 @@ export async function runRuntimeMenu(
     if (action === "settings") {
       await handleSettingsAction(
         resolved.ui,
-        resolved.runner,
         resolved.homeDir,
         resolved.fs
       );
@@ -429,6 +458,15 @@ export async function runRuntimeMenu(
     }
 
     if (action === "doctor") {
+      const ready = await ensureEmbeddingCompatibilityOrReset(
+        resolved.ui,
+        resolved.runner,
+        resolved.homeDir,
+        resolved.fs
+      );
+      if (!ready) {
+        continue;
+      }
       const code = await runDoctorCommand([], {
         runner: resolved.runner,
       });
@@ -441,6 +479,15 @@ export async function runRuntimeMenu(
     }
 
     if (action === "start_mcp_server") {
+      const ready = await ensureEmbeddingCompatibilityOrReset(
+        resolved.ui,
+        resolved.runner,
+        resolved.homeDir,
+        resolved.fs
+      );
+      if (!ready) {
+        continue;
+      }
       await resolved.ui.note(
         "Starting MCP bridge (long-running). Use Ctrl+C to stop when finished."
       );

@@ -22,8 +22,6 @@ jest.mock("../installer/first-run", () => ({
 jest.mock("../installer/runtime-config", () => ({
   readInstallerRuntimeEnv: jest.fn(),
   writeInstallerRuntimeEnv: jest.fn(),
-  mapEmbeddingModeToModel: (mode: "flash" | "medium") =>
-    mode === "flash" ? "nomic-embed-text" : "mxbai-embed-large",
   mapEmbeddingModeToDimension: (mode: "flash" | "medium") =>
     mode === "flash" ? 768 : 1024,
 }));
@@ -34,13 +32,19 @@ jest.mock("../installer/qdrant-dimension", () => ({
 
 jest.mock("../system/docker", () => ({
   downMemoryMeshStack: jest.fn(),
+  startMemoryMeshStack: jest.fn(),
 }));
 
 jest.mock("../installer/stack-packaging", () => ({
-  ensureInstallerManagedStack: jest.fn(),
-  getInstallerHomeDir: (homeDir: string) => `${homeDir}/.memorymesh`,
-  getInstallerManagedComposePath: (homeDir: string) => `${homeDir}/.memorymesh/stack/docker-compose.yml`,
-  getInstallerManagedStackDir: (homeDir: string) => `${homeDir}/.memorymesh/stack`,
+  resolveInstallerManagedStack: jest.fn(),
+}));
+
+jest.mock("../installer/embedding-authority", () => ({
+  resolveAuthoritativeEmbeddingConfig: jest.fn(),
+}));
+
+jest.mock("../installer/embedding-mismatch-flow", () => ({
+  runEmbeddingMismatchFlow: jest.fn(),
 }));
 
 import { runRuntimeMenu } from "../commands/menu";
@@ -55,8 +59,10 @@ import { IRuntimeMenuUi, RuntimeAction } from "../ui/runtime-menu";
 import { ICommandRunner } from "../system/command-runner";
 import { IRuntimeTextPromptOptions, PromptInputOptions, PromptResult } from "../ui/runtime-menu";
 import { ApprovalOptions, ApprovalResult } from "../ui/approval";
-import { downMemoryMeshStack } from "../system/docker";
-import { ensureInstallerManagedStack } from "../installer/stack-packaging";
+import { downMemoryMeshStack, startMemoryMeshStack } from "../system/docker";
+import { resolveInstallerManagedStack } from "../installer/stack-packaging";
+import { resolveAuthoritativeEmbeddingConfig } from "../installer/embedding-authority";
+import { runEmbeddingMismatchFlow } from "../installer/embedding-mismatch-flow";
 
 class FakeUi implements IRuntimeMenuUi {
   notes: string[] = [];
@@ -176,8 +182,14 @@ const mockedDetectQdrantCollectionDimension =
   detectQdrantCollectionDimension as jest.MockedFunction<typeof detectQdrantCollectionDimension>;
 const mockedDownMemoryMeshStack =
   downMemoryMeshStack as jest.MockedFunction<typeof downMemoryMeshStack>;
-const mockedEnsureInstallerManagedStack =
-  ensureInstallerManagedStack as jest.MockedFunction<typeof ensureInstallerManagedStack>;
+const mockedStartMemoryMeshStack =
+  startMemoryMeshStack as jest.MockedFunction<typeof startMemoryMeshStack>;
+const mockedResolveInstallerManagedStack =
+  resolveInstallerManagedStack as jest.MockedFunction<typeof resolveInstallerManagedStack>;
+const mockedResolveAuthoritativeEmbeddingConfig =
+  resolveAuthoritativeEmbeddingConfig as jest.MockedFunction<typeof resolveAuthoritativeEmbeddingConfig>;
+const mockedRunEmbeddingMismatchFlow =
+  runEmbeddingMismatchFlow as jest.MockedFunction<typeof runEmbeddingMismatchFlow>;
 
 describe("runtime menu", () => {
   const mockedReadLastImportPath = jest.fn<Promise<string | null>, [string]>();
@@ -213,11 +225,40 @@ describe("runtime menu", () => {
       ok: true,
       message: "down ok",
     });
-    mockedEnsureInstallerManagedStack.mockResolvedValue({
+    mockedStartMemoryMeshStack.mockResolvedValue({
+      ok: true,
+      message: "up ok",
+    });
+    mockedResolveInstallerManagedStack.mockReturnValue({
       projectDir: "/tmp/home/.memorymesh/stack",
       composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
       mode: "release-image",
     });
+    mockedResolveAuthoritativeEmbeddingConfig.mockResolvedValue({
+      config: {
+        installState: "installed",
+        embeddingMode: "flash",
+        embeddingModel: "nomic-embed-text",
+        embeddingDimension: 768,
+        installedAt: "2026-03-16T00:00:00.000Z",
+        stackProjectDir: "/tmp/home/.memorymesh/stack",
+        composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
+        stackMode: "release-image",
+      },
+      embedding: {
+        embeddingMode: "flash",
+        embeddingModel: "nomic-embed-text",
+        embeddingDimension: 768,
+      },
+      runtimeEnv: {
+        EMBEDDING_MODEL: "nomic-embed-text",
+        MEMORYMESH_EMBEDDING_MODE: "flash",
+        MEMORYMESH_EMBEDDING_DIMENSION: "768",
+      },
+      runtimeEnvPath: "/tmp/home/.memorymesh/runtime.env",
+      runtimeEnvRegenerated: false,
+    });
+    mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "no_mismatch" });
     mockedReadLastImportPath.mockResolvedValue(null);
     mockedPersistLastImportPath.mockResolvedValue();
   });
@@ -611,6 +652,7 @@ describe("runtime menu", () => {
     expect(mockedWriteInstallerRuntimeEnv).toHaveBeenCalled();
     expect(ui.notes.some((note) => note.includes("Settings saved"))).toBe(true);
     expect(ui.approvalCalls).toBe(0);
+    expect(mockedRunEmbeddingMismatchFlow).not.toHaveBeenCalled();
   });
 
   it("applies no settings changes when selection is unchanged", async () => {
@@ -620,54 +662,83 @@ describe("runtime menu", () => {
     expect(ui.notes.some((note) => note.includes("No settings changes applied"))).toBe(true);
   });
 
-  it("runs immediate mismatch approval in settings and applies reset when approved", async () => {
+  it("does not run mismatch approval inside settings", async () => {
     const ui = new FakeUi(["settings", "exit"], [], ["medium"], [{ status: "approved" }]);
-    mockedDetectQdrantCollectionDimension.mockResolvedValue(768);
-    const fs = {
-      exists: (path: string) => path.endsWith("docker-compose.yml"),
-      mkdir: async () => {},
-      read: async () => "",
-      write: async () => {},
-    };
 
-    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home", fs });
+    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
 
-    expect(ui.approvalCalls).toBe(1);
+    expect(ui.approvalCalls).toBe(0);
+    expect(mockedRunEmbeddingMismatchFlow).not.toHaveBeenCalled();
+    expect(mockedDownMemoryMeshStack).not.toHaveBeenCalled();
+    expect(
+      ui.notes.some((note) =>
+        note.includes("Embedding model updated. If incompatible with existing data")
+      )
+    ).toBe(true);
+  });
+
+  it("runs centralized mismatch guard before import action and cancels action on reject", async () => {
+    const ui = new FakeUi(["import_chatgpt", "exit"], ["~/Downloads/export.json", "", "", ""]);
+    mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "rejected" });
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+      detectImportPath: jest.fn<Promise<string | null>, [string]>().mockResolvedValue(null),
+      readLastImportPath: mockedReadLastImportPath,
+      persistLastImportPath: mockedPersistLastImportPath,
+    });
+
+    expect(mockedRunEmbeddingMismatchFlow).toHaveBeenCalledTimes(1);
+    expect(mockedRunImportGptCommand).not.toHaveBeenCalled();
+    expect(ui.notes.some((note) => note.includes("Action cancelled."))).toBe(true);
+  });
+
+  it("runs centralized mismatch guard before import and performs reset on approve", async () => {
+    const ui = new FakeUi(["import_chatgpt", "exit"], ["~/Downloads/export.json", "", "", ""]);
+    mockedDetectQdrantCollectionDimension.mockResolvedValue(1024);
+    mockedResolveAuthoritativeEmbeddingConfig.mockResolvedValue({
+      config: {
+        installState: "installed",
+        embeddingMode: "flash",
+        embeddingModel: "nomic-embed-text",
+        embeddingDimension: 768,
+        installedAt: "2026-03-16T00:00:00.000Z",
+        stackProjectDir: "/tmp/home/.memorymesh/stack",
+        composeFilePath: "/tmp/home/.memorymesh/stack/docker-compose.yml",
+        stackMode: "release-image",
+      },
+      embedding: {
+        embeddingMode: "flash",
+        embeddingModel: "nomic-embed-text",
+        embeddingDimension: 768,
+      },
+      runtimeEnv: {
+        EMBEDDING_MODEL: "nomic-embed-text",
+        MEMORYMESH_EMBEDDING_MODE: "flash",
+        MEMORYMESH_EMBEDDING_DIMENSION: "768",
+      },
+      runtimeEnvPath: "/tmp/home/.memorymesh/runtime.env",
+      runtimeEnvRegenerated: false,
+    });
+    mockedRunEmbeddingMismatchFlow.mockImplementation(async ({ onApprovedReset }) => {
+      await onApprovedReset();
+      return { status: "approved" };
+    });
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+      detectImportPath: jest.fn<Promise<string | null>, [string]>().mockResolvedValue(null),
+      readLastImportPath: mockedReadLastImportPath,
+      persistLastImportPath: mockedPersistLastImportPath,
+    });
+
+    expect(mockedRunEmbeddingMismatchFlow).toHaveBeenCalledTimes(1);
     expect(mockedDownMemoryMeshStack).toHaveBeenCalledTimes(1);
-    expect(mockedEnsureInstallerManagedStack).toHaveBeenCalledTimes(1);
-    expect(mockedPersistInstallConfig).toHaveBeenCalledWith(
-      "/tmp/home",
-      expect.objectContaining({
-        embeddingMode: "medium",
-        embeddingModel: "mxbai-embed-large",
-        embeddingDimension: 1024,
-      }),
-      expect.anything()
-    );
-  });
-
-  it("keeps config unchanged when settings mismatch approval is rejected", async () => {
-    const ui = new FakeUi(["settings", "exit"], [], ["medium"], [{ status: "rejected" }]);
-    mockedDetectQdrantCollectionDimension.mockResolvedValue(768);
-
-    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
-
-    expect(ui.approvalCalls).toBe(1);
-    expect(mockedDownMemoryMeshStack).not.toHaveBeenCalled();
-    expect(mockedPersistInstallConfig).not.toHaveBeenCalled();
-    expect(ui.notes.some((note) => note.includes("No settings changes applied"))).toBe(true);
-  });
-
-  it("keeps config unchanged when settings mismatch approval is cancelled", async () => {
-    const ui = new FakeUi(["settings", "exit"], [], ["medium"], [{ status: "cancelled" }]);
-    mockedDetectQdrantCollectionDimension.mockResolvedValue(768);
-
-    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
-
-    expect(ui.approvalCalls).toBe(1);
-    expect(mockedDownMemoryMeshStack).not.toHaveBeenCalled();
-    expect(mockedPersistInstallConfig).not.toHaveBeenCalled();
-    expect(ui.notes.some((note) => note.includes("No settings changes applied"))).toBe(true);
+    expect(mockedRunImportGptCommand).toHaveBeenCalledTimes(1);
   });
 
   it("keeps doctor wiring", async () => {
