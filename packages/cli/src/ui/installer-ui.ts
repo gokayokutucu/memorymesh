@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import ora, { Ora } from "ora";
+import { ApprovalOptions, ApprovalResult } from "./approval";
 
 export type EmbeddingModel = "nomic-embed-text" | "mxbai-embed-large";
 export type DirtyStateAction = "clean_install" | "reuse_existing" | "exit";
@@ -18,6 +19,7 @@ export interface IInstallerUi {
   outro(message: string): Promise<void>;
   note(message: string): Promise<void>;
   error(message: string): Promise<void>;
+  promptApproval(options: ApprovalOptions): Promise<ApprovalResult>;
   confirm(input: IConfirmPrompt): Promise<boolean | null>;
   selectDirtyStateAction(input: IDirtyStatePrompt): Promise<DirtyStateAction | null>;
   selectEmbeddingModel(input?: {
@@ -78,6 +80,40 @@ export class ClackInstallerUi implements IInstallerUi {
   async error(message: string): Promise<void> {
     const clack = await import("@clack/prompts");
     clack.log.error(chalk.red(message));
+  }
+
+  async promptApproval(options: ApprovalOptions): Promise<ApprovalResult> {
+    const clack = await import("@clack/prompts");
+    clack.log.warn(chalk.yellow(options.title));
+    if (options.bodyLines.length > 0) {
+      clack.log.message(chalk.gray(options.bodyLines.join("\n")));
+    }
+
+    const answer = await clack.select({
+      message: "Confirm action",
+      options: [
+        {
+          value: "approve",
+          label: options.confirmLabel ?? "Yes",
+        },
+        {
+          value: "reject",
+          label: options.rejectLabel ?? "No",
+        },
+      ],
+      initialValue: "reject",
+    });
+
+    if (clack.isCancel(answer)) {
+      if (options.allowCancel === false) {
+        return { status: "rejected" };
+      }
+      return { status: "cancelled" };
+    }
+
+    return answer === "approve"
+      ? { status: "approved" }
+      : { status: "rejected" };
   }
 
   async confirm(input: IConfirmPrompt): Promise<boolean | null> {

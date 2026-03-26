@@ -5,10 +5,15 @@ import {
 } from "./claude-config";
 import { persistInstallConfig } from "./first-run";
 import {
+  IEmbeddingMismatchFlowResult,
+  runEmbeddingMismatchFlow,
+} from "./embedding-mismatch-flow";
+import {
   mapEmbeddingModeToDimension,
   mapEmbeddingModeToModel,
   writeInstallerRuntimeEnv,
 } from "./runtime-config";
+import { detectQdrantCollectionDimension } from "./qdrant-dimension";
 import { inspectDirtySetupState } from "./dirty-state";
 import {
   ensureInstallerManagedStack,
@@ -94,39 +99,6 @@ function resolveEmbeddingMode(
   }
 
   return "medium";
-}
-
-async function detectQdrantCollectionDimension(
-  runner: ICommandRunner,
-  collectionName: string
-): Promise<number | null> {
-  const result = await runner.run("curl", [
-    "-fsS",
-    `http://localhost:6333/collections/${collectionName}`,
-  ]);
-  if (!result.success) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(result.stdout) as {
-      result?: {
-        config?: {
-          params?: {
-            vectors?: { size?: number } | null;
-            vector_size?: number;
-          };
-        };
-      };
-    };
-    const size =
-      parsed.result?.config?.params?.vectors?.size
-      ?? parsed.result?.config?.params?.vector_size
-      ?? null;
-    return typeof size === "number" ? size : null;
-  } catch {
-    return null;
-  }
 }
 
 async function cleanupManagedState(
@@ -257,51 +229,56 @@ export async function runSetupWizard(
   let selectedMode = resolveEmbeddingMode(selectedModel);
   let selectedDimension = mapEmbeddingModeToDimension(selectedMode);
 
-  if (existingDimension && selectedDimension !== existingDimension) {
-    const confirmReset = await resolved.ui.confirm({
-      message:
-        `Selected embedding dimension (${selectedDimension}) does not match existing data (${existingDimension}).\n\n`
-        + "This will DELETE all existing MemoryMesh embedding data.\n\n"
-        + "Do you want to continue?",
-      initialValue: false,
+  let mismatchResult: IEmbeddingMismatchFlowResult;
+  try {
+    mismatchResult = await runEmbeddingMismatchFlow({
+      existingDimension,
+      selectedDimension,
+      selectedMode,
+      selectedModel,
+      ui: resolved.ui,
+      onApprovedReset: async () => {
+        await resolved.ui.note(
+          "Selected model requires reset of existing embedding data."
+        );
+        await resolved.ui.note("Resetting MemoryMesh state...");
+
+        const cleanupResult = await cleanupManagedState(
+          resolved,
+          resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir))
+        );
+        if (!cleanupResult.ok) {
+          throw new Error(`Unable to reset managed state for new embedding model: ${cleanupResult.message}`);
+        }
+        needsManagedStackCleanup = true;
+        await resolved.ui.note("Reset complete. Continuing setup with new embedding model.");
+        const refreshedManagedStack = await ensureInstallerManagedStack(
+          resolved.homeDir,
+          resolved.fs,
+          { cwd: resolved.cwd, env: resolved.env }
+        );
+        stackContext = refreshedManagedStack;
+        stackMode = refreshedManagedStack.mode;
+      },
     });
-    if (!confirmReset) {
-      await resolved.ui.note("Setup cancelled. No changes were made.");
-      await resolved.ui.outro("Setup cancelled.");
-      return "cancelled";
-    }
-
-    await resolved.ui.note(
-      "Selected model requires reset of existing embedding data."
+  } catch (error) {
+    return failWithMessage(
+      resolved.ui,
+      String(error)
     );
-    await resolved.ui.note("Resetting MemoryMesh state...");
+  }
 
-    const cleanupResult = await cleanupManagedState(
-      resolved,
-      resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir))
+  if (mismatchResult.status === "rejected" || mismatchResult.status === "cancelled") {
+    await resolved.ui.note("Setup cancelled. No changes were made.");
+    await resolved.ui.outro("Setup cancelled.");
+    return "cancelled";
+  }
+
+  if (mismatchResult.status === "approved" && !stackContext) {
+    return failWithMessage(
+      resolved.ui,
+      "Unable to recreate installer-managed stack after embedding reset."
     );
-    if (!cleanupResult.ok) {
-      return failWithMessage(
-        resolved.ui,
-        `Unable to reset managed state for new embedding model: ${cleanupResult.message}`
-      );
-    }
-    needsManagedStackCleanup = true;
-    await resolved.ui.note("Reset complete. Continuing setup with new embedding model.");
-    try {
-      const refreshedManagedStack = await ensureInstallerManagedStack(
-        resolved.homeDir,
-        resolved.fs,
-        { cwd: resolved.cwd, env: resolved.env }
-      );
-      stackContext = refreshedManagedStack;
-      stackMode = refreshedManagedStack.mode;
-    } catch (error) {
-      return failWithMessage(
-        resolved.ui,
-        `Unable to recreate installer-managed stack after embedding reset: ${String(error)}`
-      );
-    }
   }
 
   const runtimeEnv = {

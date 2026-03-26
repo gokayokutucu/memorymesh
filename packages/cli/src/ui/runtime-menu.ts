@@ -1,3 +1,5 @@
+import { ApprovalOptions, ApprovalResult } from "./approval";
+
 export type RuntimeAction =
   | "import_chatgpt"
   | "import_documents"
@@ -11,6 +13,7 @@ export interface IRuntimeMenuUi {
   intro(title: string): Promise<void>;
   outro(message: string): Promise<void>;
   note(message: string): Promise<void>;
+  promptApproval(options: ApprovalOptions): Promise<ApprovalResult>;
   selectAction(): Promise<RuntimeAction | null>;
   promptInput(options: PromptInputOptions): Promise<PromptResult>;
   promptText(
@@ -264,6 +267,40 @@ export class ClackRuntimeMenuUi implements IRuntimeMenuUi {
   async note(message: string): Promise<void> {
     const clack = await import("@clack/prompts");
     clack.log.message(message);
+  }
+
+  async promptApproval(options: ApprovalOptions): Promise<ApprovalResult> {
+    const clack = await import("@clack/prompts");
+    clack.log.warn(options.title);
+    if (options.bodyLines.length > 0) {
+      clack.log.message(options.bodyLines.join("\n"));
+    }
+
+    const answer = await clack.select({
+      message: "Confirm action",
+      options: [
+        {
+          value: "approve",
+          label: options.confirmLabel ?? "Yes",
+        },
+        {
+          value: "reject",
+          label: options.rejectLabel ?? "No",
+        },
+      ],
+      initialValue: "reject",
+    });
+
+    if (clack.isCancel(answer)) {
+      if (options.allowCancel === false) {
+        return { status: "rejected" };
+      }
+      return { status: "cancelled" };
+    }
+
+    return answer === "approve"
+      ? { status: "approved" }
+      : { status: "rejected" };
   }
 
   async selectAction(): Promise<RuntimeAction | null> {

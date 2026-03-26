@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import {
   detectLatestChatGptExportPath,
   expandHomePath,
@@ -9,14 +10,28 @@ import { runMcpCommand } from "./mcp";
 import { ExecaCommandRunner, ICommandRunner } from "../system/command-runner";
 import { persistInstallConfig, readInstallConfig } from "../installer/first-run";
 import {
+  mapEmbeddingModeToModel,
   mapEmbeddingModeToDimension,
   readInstallerRuntimeEnv,
   writeInstallerRuntimeEnv,
 } from "../installer/runtime-config";
+import { detectQdrantCollectionDimension } from "../installer/qdrant-dimension";
+import {
+  IEmbeddingMismatchFlowResult,
+  runEmbeddingMismatchFlow,
+} from "../installer/embedding-mismatch-flow";
+import {
+  ensureInstallerManagedStack,
+  getInstallerHomeDir,
+  getInstallerManagedComposePath,
+  getInstallerManagedStackDir,
+} from "../installer/stack-packaging";
 import { IFileSystem, nodeFileSystem } from "../system/filesystem";
 import { resolveUserHomeDir } from "../system/runtime-home";
 import { ClackRuntimeMenuUi, IRuntimeMenuUi } from "../ui/runtime-menu";
 import { runWizard, WizardStep } from "../ui/wizard";
+import { downMemoryMeshStack } from "../system/docker";
+import { IStackContext } from "../system/stack-context";
 
 export interface IRuntimeMenuDeps {
   ui: IRuntimeMenuUi;
@@ -267,6 +282,7 @@ async function handleSearchAction(ui: IRuntimeMenuUi): Promise<number> {
 
 async function handleSettingsAction(
   ui: IRuntimeMenuUi,
+  runner: ICommandRunner,
   homeDir: string,
   fs: IFileSystem
 ): Promise<number> {
@@ -295,10 +311,52 @@ async function handleSettingsAction(
   const nextConfig = {
     ...installConfig,
     embeddingMode: selectedMode,
-    embeddingModel:
-      selectedMode === "flash" ? "nomic-embed-text" : "mxbai-embed-large",
+    embeddingModel: mapEmbeddingModeToModel(selectedMode),
     embeddingDimension: mapEmbeddingModeToDimension(selectedMode),
   };
+
+  const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
+  const existingDimension = await detectQdrantCollectionDimension(runner, collectionName);
+  let mismatchResult: IEmbeddingMismatchFlowResult;
+  try {
+    mismatchResult = await runEmbeddingMismatchFlow({
+      existingDimension,
+      selectedDimension: nextConfig.embeddingDimension,
+      selectedMode: nextConfig.embeddingMode,
+      selectedModel: nextConfig.embeddingModel,
+      ui,
+      onApprovedReset: async () => {
+        await ui.note("Selected model requires reset of existing embedding data.");
+        await ui.note("Resetting MemoryMesh state...");
+        const composeFilePath = getInstallerManagedComposePath(homeDir);
+        if (fs.exists(composeFilePath)) {
+          const stackContext: IStackContext = {
+            projectDir: getInstallerManagedStackDir(homeDir),
+            composeFilePath,
+          };
+          const downResult = await downMemoryMeshStack(runner, stackContext, true);
+          if (!downResult.ok) {
+            throw new Error(`Unable to reset managed state for new embedding model: ${downResult.message}`);
+          }
+        }
+
+        await rm(getInstallerHomeDir(homeDir), { recursive: true, force: true });
+        await ensureInstallerManagedStack(homeDir, fs, {
+          cwd: process.cwd(),
+          env: process.env,
+        });
+        await ui.note("Reset complete. Continuing with new embedding model.");
+      },
+    });
+  } catch (error) {
+    await ui.note(String(error));
+    return 1;
+  }
+
+  if (mismatchResult.status === "rejected" || mismatchResult.status === "cancelled") {
+    await ui.note("No settings changes applied.");
+    return 0;
+  }
 
   await persistInstallConfig(
     homeDir,
@@ -361,7 +419,12 @@ export async function runRuntimeMenu(
     }
 
     if (action === "settings") {
-      await handleSettingsAction(resolved.ui, resolved.homeDir, resolved.fs);
+      await handleSettingsAction(
+        resolved.ui,
+        resolved.runner,
+        resolved.homeDir,
+        resolved.fs
+      );
       continue;
     }
 

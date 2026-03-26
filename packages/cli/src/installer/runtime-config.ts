@@ -23,7 +23,7 @@ export function getInstallerRuntimeEnvPath(homeDir: string): string {
 
 export function mapEmbeddingModeToModel(
   mode: "flash" | "medium"
-): string {
+): "nomic-embed-text" | "mxbai-embed-large" {
   if (mode === "flash") {
     return "nomic-embed-text";
   }

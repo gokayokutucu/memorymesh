@@ -2,6 +2,7 @@ import { runSetupWizard } from "../installer/setup-wizard";
 import { IFileSystem } from "../system/filesystem";
 import { ICommandRunner } from "../system/command-runner";
 import { IInstallerUi, ISpinner, ISpinnerFactory } from "../ui/installer-ui";
+import { ApprovalOptions, ApprovalResult } from "../ui/approval";
 
 const STACK_PATH = "/tmp/home/.memorymesh/stack/docker-compose.yml";
 const STACK_DIR = "/tmp/home/.memorymesh/stack";
@@ -101,12 +102,14 @@ class FakeUi implements IInstallerUi {
   notes: string[] = [];
   dirtyPromptCalls = 0;
   confirmCalls = 0;
+  approvalCalls = 0;
 
   constructor(
     private readonly shouldConfigureClaude = true,
     private readonly selectedEmbeddingModel: "nomic-embed-text" | "mxbai-embed-large" = "nomic-embed-text",
     private readonly dirtyStateAction: "clean_install" | "reuse_existing" | "exit" = "reuse_existing",
-    private readonly confirmResponse = true
+    private readonly confirmResponse = true,
+    private readonly approvalResponse: ApprovalResult = { status: "approved" }
   ) {}
 
   async intro(): Promise<void> {}
@@ -118,6 +121,10 @@ class FakeUi implements IInstallerUi {
   }
   async error(message: string): Promise<void> {
     this.notes.push(message);
+  }
+  async promptApproval(_options: ApprovalOptions): Promise<ApprovalResult> {
+    this.approvalCalls += 1;
+    return this.approvalResponse;
   }
   async confirm(_input: { message: string; initialValue?: boolean }): Promise<boolean | null> {
     this.confirmCalls += 1;
@@ -570,7 +577,7 @@ describe("setup wizard", () => {
     });
 
     expect(code).toBe("completed");
-    expect(ui.confirmCalls).toBe(1);
+    expect(ui.approvalCalls).toBe(1);
     expect(removedPaths).toContain("/tmp/home/.memorymesh");
     expect(
       ui.notes.some((note) => note.includes("Selected model requires reset of existing embedding data"))
@@ -591,7 +598,13 @@ describe("setup wizard", () => {
       read: async () => "{}",
       write: async () => {},
     };
-    const ui = new FakeUi(false, "mxbai-embed-large", "reuse_existing", false);
+    const ui = new FakeUi(
+      false,
+      "mxbai-embed-large",
+      "reuse_existing",
+      false,
+      { status: "rejected" }
+    );
     const removedPaths: string[] = [];
     const map = createBaseRunnerMap();
     map["curl -fsS http://localhost:6333/collections/memories"] = {
@@ -621,7 +634,7 @@ describe("setup wizard", () => {
     });
 
     expect(code).toBe("cancelled");
-    expect(ui.confirmCalls).toBe(1);
+    expect(ui.approvalCalls).toBe(1);
     expect(removedPaths).toHaveLength(0);
     expect(
       ui.notes.some((note) => note.includes("Setup cancelled. No changes were made."))
