@@ -70,6 +70,7 @@ class FakeUi implements IRuntimeMenuUi {
   promptPlaceholders: string[] = [];
   promptTabCycleValues: string[][] = [];
   approvalCalls = 0;
+  embeddingModeDefaults: Array<"flash" | "medium"> = [];
 
   constructor(
     private readonly actions: RuntimeAction[],
@@ -144,7 +145,8 @@ class FakeUi implements IRuntimeMenuUi {
     }
     return result.value;
   }
-  async selectEmbeddingMode(): Promise<"flash" | "medium" | null> {
+  async selectEmbeddingMode(currentMode: "flash" | "medium"): Promise<"flash" | "medium" | null> {
+    this.embeddingModeDefaults.push(currentMode);
     return this.embeddingSelections.shift() ?? null;
   }
 }
@@ -637,6 +639,7 @@ describe("runtime menu", () => {
 
   it("updates settings via embedding select and persists flash|medium", async () => {
     const ui = new FakeUi(["settings", "exit"], [], ["medium"]);
+    mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "no_mismatch" });
 
     await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
 
@@ -652,7 +655,7 @@ describe("runtime menu", () => {
     expect(mockedWriteInstallerRuntimeEnv).toHaveBeenCalled();
     expect(ui.notes.some((note) => note.includes("Settings saved"))).toBe(true);
     expect(ui.approvalCalls).toBe(0);
-    expect(mockedRunEmbeddingMismatchFlow).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddingMismatchFlow).toHaveBeenCalledTimes(1);
   });
 
   it("applies no settings changes when selection is unchanged", async () => {
@@ -662,19 +665,65 @@ describe("runtime menu", () => {
     expect(ui.notes.some((note) => note.includes("No settings changes applied"))).toBe(true);
   });
 
-  it("does not run mismatch approval inside settings", async () => {
+  it("preselects current embedding mode in settings", async () => {
+    const ui = new FakeUi(["settings", "exit"], [], ["medium"]);
+    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
+    expect(ui.embeddingModeDefaults).toEqual(["flash"]);
+  });
+
+  it("runs shared mismatch flow immediately in settings for different mode", async () => {
     const ui = new FakeUi(["settings", "exit"], [], ["medium"], [{ status: "approved" }]);
+    mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "no_mismatch" });
 
     await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
 
-    expect(ui.approvalCalls).toBe(0);
-    expect(mockedRunEmbeddingMismatchFlow).not.toHaveBeenCalled();
-    expect(mockedDownMemoryMeshStack).not.toHaveBeenCalled();
-    expect(
-      ui.notes.some((note) =>
-        note.includes("Embedding model updated. If incompatible with existing data")
-      )
-    ).toBe(true);
+    expect(mockedRunEmbeddingMismatchFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs reset and applies config on settings approve path", async () => {
+    const ui = new FakeUi(["settings", "exit"], [], ["medium"]);
+    mockedDetectQdrantCollectionDimension.mockResolvedValue(768);
+    mockedRunEmbeddingMismatchFlow.mockImplementation(async ({ onApprovedReset }) => {
+      await onApprovedReset();
+      return { status: "approved" };
+    });
+
+    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
+
+    expect(mockedDownMemoryMeshStack).toHaveBeenCalledTimes(1);
+    expect(mockedStartMemoryMeshStack).toHaveBeenCalledTimes(1);
+    expect(mockedPersistInstallConfig).toHaveBeenCalledWith(
+      "/tmp/home",
+      expect.objectContaining({
+        embeddingMode: "medium",
+        embeddingModel: "mxbai-embed-large",
+        embeddingDimension: 1024,
+      }),
+      expect.anything()
+    );
+    expect(mockedWriteInstallerRuntimeEnv).toHaveBeenCalled();
+  });
+
+  it("keeps config unchanged on settings reject path", async () => {
+    const ui = new FakeUi(["settings", "exit"], [], ["medium"]);
+    mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "rejected" });
+
+    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
+
+    expect(mockedPersistInstallConfig).not.toHaveBeenCalled();
+    expect(mockedWriteInstallerRuntimeEnv).not.toHaveBeenCalled();
+    expect(ui.notes.some((note) => note.includes("No settings changes applied."))).toBe(true);
+  });
+
+  it("keeps config unchanged on settings cancel path", async () => {
+    const ui = new FakeUi(["settings", "exit"], [], ["medium"]);
+    mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "cancelled" });
+
+    await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: "/tmp/home" });
+
+    expect(mockedPersistInstallConfig).not.toHaveBeenCalled();
+    expect(mockedWriteInstallerRuntimeEnv).not.toHaveBeenCalled();
+    expect(ui.notes.some((note) => note.includes("No settings changes applied."))).toBe(true);
   });
 
   it("runs centralized mismatch guard before import action and cancels action on reject", async () => {

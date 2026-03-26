@@ -273,6 +273,7 @@ async function handleSearchAction(ui: IRuntimeMenuUi): Promise<number> {
 
 async function handleSettingsAction(
   ui: IRuntimeMenuUi,
+  runner: ICommandRunner,
   homeDir: string,
   fs: IFileSystem
 ): Promise<number> {
@@ -298,13 +299,54 @@ async function handleSettingsAction(
     await ui.note("No settings changes applied.");
     return 0;
   }
+  const selectedModel: "nomic-embed-text" | "mxbai-embed-large" =
+    selectedMode === "flash" ? "nomic-embed-text" : "mxbai-embed-large";
   const nextConfig = {
     ...installConfig,
     embeddingMode: selectedMode,
-    embeddingModel:
-      selectedMode === "flash" ? "nomic-embed-text" : "mxbai-embed-large",
+    embeddingModel: selectedModel,
     embeddingDimension: mapEmbeddingModeToDimension(selectedMode),
   };
+
+  const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
+  const existingDimension = await detectQdrantCollectionDimension(runner, collectionName);
+  const nextRuntimeEnv: NodeJS.ProcessEnv = {
+    EMBEDDING_MODEL: nextConfig.embeddingModel,
+    MEMORYMESH_EMBEDDING_MODE: nextConfig.embeddingMode,
+    MEMORYMESH_EMBEDDING_DIMENSION: String(nextConfig.embeddingDimension),
+  };
+  const stackContext = resolveInstallerManagedStack(homeDir, fs) ?? {
+    projectDir: installConfig.stackProjectDir,
+    composeFilePath: installConfig.composeFilePath,
+  };
+
+  try {
+    const mismatchResult = await runEmbeddingMismatchFlow({
+      existingDimension,
+      selectedDimension: nextConfig.embeddingDimension,
+      selectedMode: nextConfig.embeddingMode,
+      selectedModel,
+      ui,
+      onApprovedReset: async () => {
+        await ui.note("Embedding mismatch detected. Reset required.");
+        await runEmbeddingReset(
+          ui,
+          runner,
+          stackContext,
+          nextRuntimeEnv,
+          installConfig.stackMode ?? "release-image"
+        );
+      },
+    });
+
+    if (mismatchResult.status === "rejected" || mismatchResult.status === "cancelled") {
+      await ui.note("No settings changes applied.");
+      return 0;
+    }
+  } catch (error) {
+    await ui.note(String(error));
+    return 1;
+  }
 
   await persistInstallConfig(
     homeDir,
@@ -324,9 +366,34 @@ async function handleSettingsAction(
   await ui.note(`Derived embeddingModel=${nextConfig.embeddingModel}.`);
   await ui.note(`Derived embeddingDimension=${nextConfig.embeddingDimension}.`);
   await ui.note(
-    "Embedding model updated. If incompatible with existing data, you will be prompted to reset when starting an action."
+    "Embedding model updated."
   );
   return 0;
+}
+
+async function runEmbeddingReset(
+  ui: IRuntimeMenuUi,
+  runner: ICommandRunner,
+  stackContext: IStackContext,
+  runtimeEnv: NodeJS.ProcessEnv,
+  stackMode: "release-image" | "local-dev-build"
+): Promise<void> {
+  await ui.note("Resetting MemoryMesh state...");
+  const downResult = await downMemoryMeshStack(runner, stackContext, true);
+  if (!downResult.ok) {
+    throw new Error(downResult.message);
+  }
+
+  const startResult = await startMemoryMeshStack(
+    runner,
+    stackContext,
+    runtimeEnv,
+    stackMode
+  );
+  if (!startResult.ok) {
+    throw new Error(startResult.message);
+  }
+  await ui.note("Reset complete. Continuing action.");
 }
 
 async function ensureEmbeddingCompatibilityOrReset(
@@ -347,28 +414,17 @@ async function ensureEmbeddingCompatibilityOrReset(
       ui,
       onApprovedReset: async () => {
         await ui.note("Embedding mismatch detected. Reset required.");
-        await ui.note("Resetting MemoryMesh state...");
-
         const stackContext: IStackContext = resolveInstallerManagedStack(homeDir, fs) ?? {
           projectDir: authority.config.stackProjectDir,
           composeFilePath: authority.config.composeFilePath,
         };
-        const downResult = await downMemoryMeshStack(runner, stackContext, true);
-        if (!downResult.ok) {
-          throw new Error(downResult.message);
-        }
-
-        const startResult = await startMemoryMeshStack(
+        await runEmbeddingReset(
+          ui,
           runner,
           stackContext,
           authority.runtimeEnv,
           authority.config.stackMode ?? "release-image"
         );
-        if (!startResult.ok) {
-          throw new Error(startResult.message);
-        }
-
-        await ui.note("Reset complete. Continuing action.");
       },
     });
 
@@ -451,6 +507,7 @@ export async function runRuntimeMenu(
     if (action === "settings") {
       await handleSettingsAction(
         resolved.ui,
+        resolved.runner,
         resolved.homeDir,
         resolved.fs
       );
