@@ -6,6 +6,10 @@ jest.mock("../commands/import-gpt", () => ({
   runImportGptCommand: jest.fn(),
 }));
 
+jest.mock("../commands/import-documents", () => ({
+  runImportDocumentsCommand: jest.fn(),
+}));
+
 jest.mock("../commands/mcp", () => ({
   runMcpCommand: jest.fn(),
 }));
@@ -50,6 +54,7 @@ jest.mock("../installer/embedding-mismatch-flow", () => ({
 import { runRuntimeMenu } from "../commands/menu";
 import { runDoctorCommand } from "../commands/doctor";
 import { runImportGptCommand } from "../commands/import-gpt";
+import { runImportDocumentsCommand } from "../commands/import-documents";
 import { runMcpCommand } from "../commands/mcp";
 import { runSearchCommand } from "../commands/search";
 import { persistInstallConfig, readInstallConfig } from "../installer/first-run";
@@ -168,6 +173,8 @@ const mockedRunDoctorCommand = runDoctorCommand as jest.MockedFunction<
 const mockedRunImportGptCommand = runImportGptCommand as jest.MockedFunction<
   typeof runImportGptCommand
 >;
+const mockedRunImportDocumentsCommand =
+  runImportDocumentsCommand as jest.MockedFunction<typeof runImportDocumentsCommand>;
 const mockedRunMcpCommand = runMcpCommand as jest.MockedFunction<typeof runMcpCommand>;
 const mockedRunSearchCommand = runSearchCommand as jest.MockedFunction<typeof runSearchCommand>;
 const mockedReadInstallConfig = readInstallConfig as jest.MockedFunction<
@@ -201,6 +208,7 @@ describe("runtime menu", () => {
     jest.clearAllMocks();
     mockedRunDoctorCommand.mockResolvedValue(0);
     mockedRunImportGptCommand.mockResolvedValue(0);
+    mockedRunImportDocumentsCommand.mockResolvedValue(0);
     mockedRunMcpCommand.mockResolvedValue(0);
     mockedRunSearchCommand.mockResolvedValue({
       ok: true,
@@ -538,6 +546,32 @@ describe("runtime menu", () => {
       "Search query (Ctrl+C to return to menu)",
     ]);
     expect(ui.notes.some((note) => note.includes("source=chatgpt"))).toBe(true);
+  });
+
+  it("runs document import flow from runtime menu", async () => {
+    const ui = new FakeUi(["import_documents", "exit"], [
+      "~/Documents/notes",
+      "",
+      "",
+    ]);
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+    });
+
+    expect(mockedRunImportDocumentsCommand).toHaveBeenCalledWith(
+      [
+        "--path",
+        "/tmp/home/Documents/notes",
+        "--project",
+        "MemoryMesh",
+        "--import-policy",
+        "skip_existing",
+      ]
+    );
+    expect(ui.notes.some((note) => note.includes("Document import completed."))).toBe(true);
   });
 
   it("keeps search mode in loop after no-result response", async () => {

@@ -223,6 +223,128 @@ async function handleImportChatGptAction(
   return code;
 }
 
+async function handleImportDocumentsAction(
+  ui: IRuntimeMenuUi,
+  homeDir: string
+): Promise<number> {
+  const defaultProject = "MemoryMesh";
+  const defaultPolicy = "skip_existing";
+
+  const steps: WizardStep[] = [
+    {
+      id: "path",
+      run: async () => {
+        while (true) {
+          const pathResult = await ui.promptInput({
+            label: "Path to file/folder to import",
+            placeholder: "~/Documents",
+            required: true,
+          });
+          if (pathResult.status === "cancel") {
+            return { type: "cancel" };
+          }
+          if (pathResult.status !== "submit") {
+            continue;
+          }
+          return {
+            type: "next",
+            data: { path: expandHomePath(pathResult.value, homeDir) },
+          };
+        }
+      },
+    },
+    {
+      id: "project",
+      run: async () => {
+        const projectResult = await ui.promptInput({
+          label: `Project (default: ${defaultProject})`,
+          placeholder: defaultProject,
+          defaultValue: defaultProject,
+          required: false,
+        });
+        if (projectResult.status === "cancel") {
+          return { type: "cancel" };
+        }
+        if (projectResult.status !== "submit") {
+          return { type: "cancel" };
+        }
+        return {
+          type: "next",
+          data: { project: projectResult.value || defaultProject },
+        };
+      },
+    },
+    {
+      id: "import_policy",
+      run: async () => {
+        const importPolicyResult = await ui.promptInput({
+          label: `Import policy (skip_existing|import_anyway|overwrite_existing, default: ${defaultPolicy})`,
+          placeholder: defaultPolicy,
+          defaultValue: defaultPolicy,
+          tabCycleValues: [
+            "skip_existing",
+            "import_anyway",
+            "overwrite_existing",
+          ],
+          required: false,
+        });
+        if (importPolicyResult.status === "cancel") {
+          return { type: "cancel" };
+        }
+        if (importPolicyResult.status !== "submit") {
+          return { type: "cancel" };
+        }
+        const importPolicyRaw = importPolicyResult.value;
+        return {
+          type: "next",
+          data: {
+            importPolicy:
+              importPolicyRaw === "import_anyway" || importPolicyRaw === "overwrite_existing"
+                ? importPolicyRaw
+                : "skip_existing",
+          },
+        };
+      },
+    },
+  ];
+
+  const wizardResult = await runWizard(steps);
+  if (!wizardResult) {
+    await ui.note("Import cancelled.");
+    return 0;
+  }
+
+  const resolvedPath = typeof wizardResult.data.path === "string"
+    ? wizardResult.data.path
+    : "";
+  const project = typeof wizardResult.data.project === "string"
+    ? wizardResult.data.project
+    : defaultProject;
+  const importPolicy = wizardResult.data.importPolicy === "import_anyway"
+    || wizardResult.data.importPolicy === "overwrite_existing"
+    ? wizardResult.data.importPolicy
+    : "skip_existing";
+
+  await ui.note(
+    `Starting document import with project=${project}, importPolicy=${importPolicy}.`
+  );
+  const { runImportDocumentsCommand } = await import("./import-documents");
+  const code = await runImportDocumentsCommand([
+    "--path",
+    resolvedPath,
+    "--project",
+    project,
+    "--import-policy",
+    importPolicy,
+  ]);
+  if (code === 0) {
+    await ui.note("Document import completed.");
+  } else {
+    await ui.note("Document import failed. Check logs and retry.");
+  }
+  return code;
+}
+
 function truncateContent(content: string, maxChars = 80): string {
   if (content.length <= maxChars) {
     return content;
@@ -484,8 +606,9 @@ export async function runRuntimeMenu(
       if (!ready) {
         continue;
       }
-      await resolved.ui.note(
-        "Document import is not implemented yet. This will be wired in a later phase."
+      await handleImportDocumentsAction(
+        resolved.ui,
+        resolved.homeDir
       );
       continue;
     }

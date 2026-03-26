@@ -10,6 +10,7 @@ function printMainHelp(): void {
   console.log("Usage:");
   console.log("  memorymesh                     # setup + interactive menu");
   console.log("  memorymesh import:gpt [args]   # direct command mode");
+  console.log("  memorymesh import:documents    # direct document import mode");
   console.log("  memorymesh doctor              # service health report");
   console.log("  memorymesh doctor --fix        # run diagnostics and safe repairs");
   console.log("  memorymesh start               # start managed stack");
@@ -53,6 +54,11 @@ export async function runMain(argv: string[]): Promise<number> {
   if (command === "import:gpt") {
     const { runImportGptCommand } = await import("./commands/import-gpt");
     return runImportGptCommand(rest);
+  }
+
+  if (command === "import:documents") {
+    const { runImportDocumentsCommand } = await import("./commands/import-documents");
+    return runImportDocumentsCommand(rest);
   }
 
   if (command === "doctor") {

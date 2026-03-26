@@ -6,6 +6,10 @@ jest.mock("../commands/import-gpt", () => ({
   runImportGptCommand: jest.fn(),
 }));
 
+jest.mock("../commands/import-documents", () => ({
+  runImportDocumentsCommand: jest.fn(),
+}));
+
 jest.mock("../commands/doctor", () => ({
   runDoctorCommand: jest.fn(),
 }));
@@ -43,6 +47,7 @@ jest.mock("../installer/setup-wizard", () => ({
 
 import { runMain } from "../main";
 import { runImportGptCommand } from "../commands/import-gpt";
+import { runImportDocumentsCommand } from "../commands/import-documents";
 import { runDoctorCommand } from "../commands/doctor";
 import {
   runResetCommand,
@@ -60,6 +65,8 @@ import { runSetupWizard } from "../installer/setup-wizard";
 const mockedRunImportGptCommand = runImportGptCommand as jest.MockedFunction<
   typeof runImportGptCommand
 >;
+const mockedRunImportDocumentsCommand =
+  runImportDocumentsCommand as jest.MockedFunction<typeof runImportDocumentsCommand>;
 const mockedRunDoctorCommand = runDoctorCommand as jest.MockedFunction<
   typeof runDoctorCommand
 >;
@@ -160,6 +167,16 @@ describe("main CLI router", () => {
     expect(mockedRunImportGptCommand).toHaveBeenCalledWith([
       "--path",
       "/tmp/export",
+    ]);
+  });
+
+  it("routes import:documents command to direct importer", async () => {
+    mockedRunImportDocumentsCommand.mockResolvedValue(0);
+    const code = await runMain(["import:documents", "--path", "/tmp/docs"]);
+    expect(code).toBe(0);
+    expect(mockedRunImportDocumentsCommand).toHaveBeenCalledWith([
+      "--path",
+      "/tmp/docs",
     ]);
   });
 
