@@ -98,7 +98,7 @@ export class ImportAuditLog {
     }
 
     try {
-      mkdirSync(this.directory, { recursive: true });
+      mkdirSync(this.directory, { recursive: true, mode: 0o700 });
       const timestamp = new Date()
         .toISOString()
         .replace(/[:.]/g, "-");
@@ -109,6 +109,7 @@ export class ImportAuditLog {
       this.stream = createWriteStream(this.filePath, {
         flags: "a",
         encoding: "utf8",
+        mode: 0o600,
       });
       this.stream.on("error", (error) => {
         this.handleFailure(error);

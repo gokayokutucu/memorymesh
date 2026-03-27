@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   readdir,
   readFile,
+  realpath,
   stat,
 } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, relative, resolve } from "node:path";
@@ -827,8 +828,9 @@ async function discoverSupportedFiles(inputPath: string): Promise<{
     };
   }
 
+  const rootRealPath = await realpath(inputPath);
   const allFiles: string[] = [];
-  await walkFiles(inputPath, allFiles);
+  await walkFiles(inputPath, rootRealPath, allFiles, new Set<string>());
   const supported: IDiscoveredFile[] = [];
   const unsupported: Array<Omit<IDiscoveredFile, "chunks">> = [];
   for (const filePath of allFiles) {
@@ -859,18 +861,51 @@ async function discoverSupportedFiles(inputPath: string): Promise<{
   };
 }
 
-async function walkFiles(pathValue: string, out: string[]): Promise<void> {
+async function walkFiles(
+  pathValue: string,
+  rootRealPath: string,
+  out: string[],
+  visitedRealDirectories: Set<string>
+): Promise<void> {
+  const currentRealPath = await realpath(pathValue);
+  if (!isPathWithinRoot(rootRealPath, currentRealPath)) {
+    return;
+  }
+  if (visitedRealDirectories.has(currentRealPath)) {
+    return;
+  }
+  visitedRealDirectories.add(currentRealPath);
+
   const entries = await readdir(pathValue, { withFileTypes: true });
   for (const entry of entries) {
     const absolute = join(pathValue, entry.name);
-    if (entry.isDirectory()) {
-      await walkFiles(absolute, out);
+    let resolvedTargetPath: string;
+    try {
+      resolvedTargetPath = await realpath(absolute);
+    } catch {
       continue;
     }
-    if (entry.isFile()) {
+    if (!isPathWithinRoot(rootRealPath, resolvedTargetPath)) {
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      await walkFiles(absolute, rootRealPath, out, visitedRealDirectories);
+      continue;
+    }
+    if (entry.isFile() || entry.isSymbolicLink()) {
+      const targetStats = await stat(absolute);
+      if (!targetStats.isFile()) {
+        continue;
+      }
       out.push(absolute);
     }
   }
+}
+
+function isPathWithinRoot(rootPath: string, candidatePath: string): boolean {
+  const rel = relative(rootPath, candidatePath);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function validateFileAgainstLimits(

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { ImportInterruptedError } from "@memorymesh/core";
@@ -79,6 +79,44 @@ describe("document-import", () => {
     });
 
     expect(summary.importedChunks).toBe(2);
+  });
+
+  it("does not follow symlinked files outside the selected root in TypeScript fallback discovery", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const docsDir = join(root, "docs");
+    const outsideDir = join(root, "outside");
+    mkdirSync(docsDir, { recursive: true });
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(docsDir, "inside.txt"), "inside content");
+    const outsideFile = join(outsideDir, "secret.txt");
+    writeFileSync(outsideFile, "outside content");
+    const symlinkPath = join(docsDir, "escape.txt");
+    try {
+      symlinkSync(outsideFile, symlinkPath);
+    } catch {
+      return;
+    }
+
+    const summary = await importDocumentsFromPath(
+      docsDir,
+      {
+        project: "MemoryMesh",
+        dryRun: true,
+        homeDir,
+      },
+      {
+        parseWithRust: async () => {
+          throw new Error("force ts fallback");
+        },
+      }
+    );
+
+    expect(summary.discoveredFiles).toBe(1);
+    expect(summary.supportedFiles).toBe(1);
+    expect(summary.importedChunks).toBeGreaterThan(0);
   });
 
   it("parses json array and object", async () => {

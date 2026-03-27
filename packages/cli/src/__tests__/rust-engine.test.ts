@@ -12,8 +12,15 @@ import { execFile } from "node:child_process";
 const mockedExecFile = execFile as unknown as jest.Mock;
 
 describe("rust-engine", () => {
+  const originalRustEngineBin = process.env.MEMORYMESH_RUST_ENGINE_BIN;
+
   beforeEach(() => {
     mockedExecFile.mockReset();
+    if (originalRustEngineBin === undefined) {
+      delete process.env.MEMORYMESH_RUST_ENGINE_BIN;
+    } else {
+      process.env.MEMORYMESH_RUST_ENGINE_BIN = originalRustEngineBin;
+    }
   });
 
   it("parses successful rust engine output", async () => {
@@ -85,8 +92,24 @@ describe("rust-engine", () => {
       }
     );
 
-    await expect(runRustImporterEngine("/tmp/in", "/missing/bin")).rejects.toThrow(
+    await expect(runRustImporterEngine("/tmp/in")).rejects.toThrow(
       "Rust importer engine binary not found"
+    );
+  });
+
+  it("rejects non-absolute MEMORYMESH_RUST_ENGINE_BIN override", async () => {
+    process.env.MEMORYMESH_RUST_ENGINE_BIN = "relative/bin/importer-engine";
+
+    await expect(runRustImporterEngine("/tmp/in")).rejects.toThrow(
+      "Rust importer engine override must be an absolute path (MEMORYMESH_RUST_ENGINE_BIN)."
+    );
+  });
+
+  it("rejects missing MEMORYMESH_RUST_ENGINE_BIN override path", async () => {
+    process.env.MEMORYMESH_RUST_ENGINE_BIN = "/tmp/does-not-exist-importer-engine";
+
+    await expect(runRustImporterEngine("/tmp/in")).rejects.toThrow(
+      "Rust importer engine override path does not exist (MEMORYMESH_RUST_ENGINE_BIN)"
     );
   });
 
@@ -137,7 +160,7 @@ describe("rust-engine", () => {
     );
 
     await expect(
-      runRustImporterEngine("/tmp/in", "/tmp/bin", {
+      runRustImporterEngine("/tmp/in", undefined, {
         EMBEDDING_MODEL: "mxbai-embed-large",
         MEMORYMESH_EMBEDDING_MODE: "medium",
         MEMORYMESH_EMBEDDING_DIMENSION: "1024",
@@ -218,107 +241,14 @@ describe("rust-engine", () => {
     ).rejects.toThrow("Rust document importer engine returned malformed JSON output");
   });
 
-  it("rebuilds legacy rust binary output and retries document mode", async () => {
+  it("fails with manual rebuild instruction on legacy document output contract", async () => {
     mockedExecFile.mockImplementation(
       (
-        command: string,
+        _command: string,
         args: string[],
         _options: unknown,
         callback: (error: Error | null, stdout: string, stderr: string) => void
       ) => {
-        if (command === "cargo") {
-          expect(args[0]).toBe("build");
-          callback(null, "", "");
-          return;
-        }
-
-        if (args[0] === "documents") {
-          if (!mockedExecFile.mock.calls.some((call) => call[0] === "cargo")) {
-            callback(
-              null,
-              JSON.stringify({
-                scan_summary: {
-                  scanned_json_files: 0,
-                  supported_conversation_file: 0,
-                  unsupported_conversation_schema: 0,
-                  ignorable_json: 0,
-                  unknown_json: 0,
-                  invalid_json: 0,
-                },
-                files: [],
-              }),
-              ""
-            );
-            return;
-          }
-
-          callback(
-            null,
-            JSON.stringify({
-              scan_summary: {
-                discovered_files: 1,
-                supported_files: 1,
-                skipped_files: 0,
-              },
-              files: [
-                {
-                  path: "/tmp/a.txt",
-                  relative_path: "a.txt",
-                  extension: ".txt",
-                  size_bytes: 12,
-                  status: "supported",
-                  reason: "parsed",
-                  chunks: [
-                    { content: "hello", chunk_index: 0, chunk_total: 1 },
-                  ],
-                },
-              ],
-            }),
-            ""
-          );
-          return;
-        }
-
-        callback(new Error("unexpected command path"), "", "");
-      }
-    );
-
-    await expect(
-      runRustDocumentImporterEngine("/tmp/in", {
-        max_file_size_mb: 5,
-        max_chars_per_file: 100000,
-        max_chunks_per_file: 200,
-        chunk_size: 1200,
-        chunk_overlap: 150,
-      })
-    ).resolves.toMatchObject({
-      scan_summary: {
-        discovered_files: 1,
-        supported_files: 1,
-        skipped_files: 0,
-      },
-      files: [
-        expect.objectContaining({
-          path: "/tmp/a.txt",
-          status: "supported",
-        }),
-      ],
-    });
-  });
-
-  it("throws clear error when legacy output rebuild fails", async () => {
-    mockedExecFile.mockImplementation(
-      (
-        command: string,
-        args: string[],
-        _options: unknown,
-        callback: (error: Error | null, stdout: string, stderr: string) => void
-      ) => {
-        if (command === "cargo") {
-          callback(new Error("cargo build failed"), "", "build error");
-          return;
-        }
-
         if (args[0] === "documents") {
           callback(
             null,
@@ -350,6 +280,9 @@ describe("rust-engine", () => {
         chunk_size: 1200,
         chunk_overlap: 150,
       })
-    ).rejects.toThrow("Detected legacy Rust importer output contract. Rebuild failed");
+    ).rejects.toThrow(
+      "Rust document importer binary is outdated for document mode. Rebuild manually with: cargo build --manifest-path native/importer-engine/Cargo.toml"
+    );
+    expect(mockedExecFile.mock.calls.some((call) => call[0] === "cargo")).toBe(false);
   });
 });

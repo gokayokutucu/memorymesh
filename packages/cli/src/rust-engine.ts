@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { IGptConversation } from "@memorymesh/core";
 import { JsonFileCategory } from "./json-shape-classifier";
 
@@ -66,10 +66,7 @@ export async function runRustImporterEngine(
   binaryPath?: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<IRustEngineOutput> {
-  const rustBinary =
-    binaryPath ??
-    process.env.MEMORYMESH_RUST_ENGINE_BIN ??
-    resolveDefaultRustBinaryPath();
+  const rustBinary = resolveRustBinaryPath(binaryPath, process.env.MEMORYMESH_RUST_ENGINE_BIN);
 
   const result = await execFileAsync(rustBinary, [inputPath], env);
 
@@ -93,10 +90,7 @@ export async function runRustDocumentImporterEngine(
   binaryPath?: string,
   env: NodeJS.ProcessEnv = process.env
 ): Promise<IRustDocumentEngineOutput> {
-  const rustBinary =
-    binaryPath ??
-    process.env.MEMORYMESH_RUST_ENGINE_BIN ??
-    resolveDefaultRustBinaryPath();
+  const rustBinary = resolveRustBinaryPath(binaryPath, process.env.MEMORYMESH_RUST_ENGINE_BIN);
   const limitsJson = JSON.stringify(limits);
   const result = await execFileAsync(
     rustBinary,
@@ -114,24 +108,9 @@ export async function runRustDocumentImporterEngine(
   }
 
   // Legacy binaries (GPT scan schema only) return a different contract here.
-  // Rebuild once and retry to ensure document mode output is aligned.
   if (isLegacyRustScanOutput(parsed)) {
-    await rebuildRustImporterEngine(env);
-    const rebuiltResult = await execFileAsync(
-      rustBinary,
-      ["documents", inputPath, limitsJson],
-      env
-    );
-    const rebuiltStdoutPreview = toOutputPreview(rebuiltResult.stdout);
-    parsed = parseRustJsonOutput(
-      rebuiltResult.stdout,
-      "Rust document importer engine returned malformed JSON output"
-    );
-    if (isRustDocumentEngineOutput(parsed)) {
-      return parsed;
-    }
     throw new Error(
-      `Rust document importer engine output does not match expected contract after rebuild. ${summarizeRustOutputShape(parsed)} | stdout preview: ${rebuiltStdoutPreview}`
+      "Rust document importer binary is outdated for document mode. Rebuild manually with: cargo build --manifest-path native/importer-engine/Cargo.toml"
     );
   }
 
@@ -186,14 +165,27 @@ function resolveDefaultRustBinaryPath(): string {
   return existing ?? candidates[0];
 }
 
-function resolveRustManifestPath(): string {
-  const candidates = [
-    resolve(process.cwd(), "native/importer-engine/Cargo.toml"),
-    resolve(process.cwd(), "../native/importer-engine/Cargo.toml"),
-    resolve(process.cwd(), "../../native/importer-engine/Cargo.toml"),
-  ];
-  const existing = candidates.find((path) => existsSync(path));
-  return existing ?? candidates[0];
+function resolveRustBinaryPath(
+  explicitBinaryPath: string | undefined,
+  envBinaryPath: string | undefined
+): string {
+  if (explicitBinaryPath !== undefined) {
+    return validateOverrideBinaryPath(explicitBinaryPath, "binaryPath");
+  }
+  if (envBinaryPath !== undefined) {
+    return validateOverrideBinaryPath(envBinaryPath, "MEMORYMESH_RUST_ENGINE_BIN");
+  }
+  return resolveDefaultRustBinaryPath();
+}
+
+function validateOverrideBinaryPath(pathValue: string, source: string): string {
+  if (!isAbsolute(pathValue)) {
+    throw new Error(`Rust importer engine override must be an absolute path (${source}).`);
+  }
+  if (!existsSync(pathValue)) {
+    throw new Error(`Rust importer engine override path does not exist (${source}): ${pathValue}`);
+  }
+  return pathValue;
 }
 
 function isRustEngineOutput(value: unknown): value is IRustEngineOutput {
@@ -320,21 +312,4 @@ function summarizeRustOutputShape(value: unknown): string {
     return `Top-level keys: [${keys}] | scan_summary keys: [${summaryKeys}]`;
   }
   return `Top-level keys: [${keys}]`;
-}
-
-async function rebuildRustImporterEngine(env: NodeJS.ProcessEnv): Promise<void> {
-  const manifestPath = resolveRustManifestPath();
-  try {
-    await execFileAsync(
-      "cargo",
-      ["build", "--manifest-path", manifestPath],
-      env
-    );
-  } catch (error) {
-    throw new Error(
-      `Detected legacy Rust importer output contract. Rebuild failed at ${manifestPath}. ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
 }
