@@ -105,7 +105,7 @@ jobs:
         run: npm test
 
       - name: Package dry-run
-        run: npm run -w memorymesh publish:check
+        run: npm run -w @okutucu/memorymesh publish:check
 
   publish_npm:
     name: Publish npm package (memorymesh)
@@ -135,7 +135,7 @@ jobs:
       - name: Publish memorymesh
         # Keep token-based publish for now.
         # Future trusted publishing migration requires Node >=22.14.0 and npm >=11.5.1.
-        run: npm publish -w memorymesh --access public
+        run: npm publish -w @okutucu/memorymesh --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
