@@ -43,4 +43,4 @@ jobs:
         run: npm test
 
       - name: NPM Pack Check (dry-run)
-        run: npm run -w memorymesh pack:check
+        run: npm run -w @okutucu/memorymesh pack:check
