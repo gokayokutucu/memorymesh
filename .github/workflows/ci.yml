@@ -6,6 +6,8 @@ on:
       - main
       - dev
       - "feature/**"
+    tags-ignore:
+      - "v*"
   pull_request:
     branches:
       - main
