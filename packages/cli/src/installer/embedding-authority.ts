@@ -26,6 +26,18 @@ function createRuntimeEnvFromResolved(
   };
 }
 
+function pickServiceAuthEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const keys = ["MONGO_USER", "MONGO_PASSWORD", "NEO4J_USER", "NEO4J_PASSWORD"] as const;
+  const picked: NodeJS.ProcessEnv = {};
+  for (const key of keys) {
+    const value = env[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      picked[key] = value.trim();
+    }
+  }
+  return picked;
+}
+
 function hasRuntimeEnvDrift(
   runtimeEnv: NodeJS.ProcessEnv,
   expected: NodeJS.ProcessEnv
@@ -58,7 +70,6 @@ export async function resolveAuthoritativeEmbeddingConfig(
   }
 
   const embedding = toResolvedEmbedding(config);
-  const expectedRuntimeEnv = createRuntimeEnvFromResolved(embedding);
   const runtimeEnvPath = getInstallerRuntimeEnvPath(homeDir);
   let runtimeEnvRegenerated = false;
   let currentRuntimeEnv: NodeJS.ProcessEnv = {};
@@ -66,14 +77,23 @@ export async function resolveAuthoritativeEmbeddingConfig(
   if (fs.exists(runtimeEnvPath)) {
     currentRuntimeEnv = parseRuntimeEnv(await fs.read(runtimeEnvPath));
   }
+  const expectedRuntimeEnv = {
+    ...createRuntimeEnvFromResolved(embedding),
+    ...pickServiceAuthEnv(currentRuntimeEnv),
+  };
 
   if (!fs.exists(runtimeEnvPath) || hasRuntimeEnvDrift(currentRuntimeEnv, expectedRuntimeEnv)) {
+    const serviceAuthEnv = pickServiceAuthEnv(currentRuntimeEnv);
     await writeInstallerRuntimeEnv(
       homeDir,
       {
         embeddingMode: embedding.embeddingMode,
         embeddingModel: embedding.embeddingModel,
         embeddingDimension: embedding.embeddingDimension,
+        mongoUser: serviceAuthEnv.MONGO_USER,
+        mongoPassword: serviceAuthEnv.MONGO_PASSWORD,
+        neo4jUser: serviceAuthEnv.NEO4J_USER,
+        neo4jPassword: serviceAuthEnv.NEO4J_PASSWORD,
       },
       fs
     );

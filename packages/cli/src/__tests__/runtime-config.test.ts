@@ -54,6 +54,37 @@ describe("runtime env config", () => {
     expect(written).toContain("MEMORYMESH_EMBEDDING_DIMENSION=1024");
   });
 
+  it("writes service auth values when provided", async () => {
+    let written = "";
+    const fs: IFileSystem = {
+      exists: () => false,
+      mkdir: async () => {},
+      read: async () => "",
+      write: async (_path, content) => {
+        written = content;
+      },
+    };
+
+    await writeInstallerRuntimeEnv(
+      "/tmp/home",
+      {
+        embeddingMode: "flash",
+        embeddingModel: "nomic-embed-text",
+        embeddingDimension: 768,
+        mongoUser: "mongo-user",
+        mongoPassword: "mongo-pass",
+        neo4jUser: "neo4j",
+        neo4jPassword: "neo4j-pass",
+      },
+      fs
+    );
+
+    expect(written).toContain("MONGO_USER=mongo-user");
+    expect(written).toContain("MONGO_PASSWORD=mongo-pass");
+    expect(written).toContain("NEO4J_USER=neo4j");
+    expect(written).toContain("NEO4J_PASSWORD=neo4j-pass");
+  });
+
   it("resolves runtime env path with Windows separators", () => {
     expect(getInstallerRuntimeEnvPath("C:\\Users\\Test")).toBe(
       "C:\\Users\\Test\\.memorymesh\\runtime.env"

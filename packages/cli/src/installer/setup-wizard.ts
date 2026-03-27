@@ -11,6 +11,7 @@ import {
 import {
   mapEmbeddingModeToDimension,
   mapEmbeddingModeToModel,
+  readInstallerRuntimeEnv,
   writeInstallerRuntimeEnv,
 } from "./runtime-config";
 import { detectQdrantCollectionDimension } from "./qdrant-dimension";
@@ -23,6 +24,7 @@ import {
   resolveStackMode,
 } from "./stack-packaging";
 import { rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { ExecaCommandRunner, ICommandRunner } from "../system/command-runner";
 import {
   checkServiceRunning,
@@ -100,6 +102,35 @@ function resolveEmbeddingMode(
   }
 
   return "medium";
+}
+
+function resolveRequiredServiceAuthEnv(
+  env: NodeJS.ProcessEnv,
+  existingRuntimeEnv: NodeJS.ProcessEnv
+): Pick<NodeJS.ProcessEnv, "MONGO_USER" | "MONGO_PASSWORD" | "NEO4J_USER" | "NEO4J_PASSWORD"> {
+  const mongoUser =
+    existingRuntimeEnv.MONGO_USER?.trim()
+    || env.MONGO_USER?.trim()
+    || "memorymesh";
+  const mongoPassword =
+    existingRuntimeEnv.MONGO_PASSWORD?.trim()
+    || env.MONGO_PASSWORD?.trim()
+    || randomBytes(16).toString("hex");
+  const neo4jUser =
+    existingRuntimeEnv.NEO4J_USER?.trim()
+    || env.NEO4J_USER?.trim()
+    || "neo4j";
+  const neo4jPassword =
+    existingRuntimeEnv.NEO4J_PASSWORD?.trim()
+    || env.NEO4J_PASSWORD?.trim()
+    || randomBytes(16).toString("hex");
+
+  return {
+    MONGO_USER: mongoUser,
+    MONGO_PASSWORD: mongoPassword,
+    NEO4J_USER: neo4jUser,
+    NEO4J_PASSWORD: neo4jPassword,
+  };
 }
 
 async function cleanupManagedState(
@@ -341,10 +372,19 @@ export async function runSetupWizard(
       );
     }
 
+    const existingRuntimeEnv = await readInstallerRuntimeEnv(
+      resolved.homeDir,
+      resolved.fs
+    );
+    const serviceAuthEnv = resolveRequiredServiceAuthEnv(
+      resolved.env,
+      existingRuntimeEnv
+    );
     const runtimeEnv = {
       EMBEDDING_MODEL: mapEmbeddingModeToModel(selectedMode),
       MEMORYMESH_EMBEDDING_MODE: selectedMode,
       MEMORYMESH_EMBEDDING_DIMENSION: String(selectedDimension),
+      ...serviceAuthEnv,
     };
 
     const stackSpinner = resolved.spinnerFactory.start("Starting MemoryMesh stack");
@@ -489,6 +529,10 @@ export async function runSetupWizard(
         embeddingMode: selectedMode,
         embeddingModel: selectedModel,
         embeddingDimension: selectedDimension,
+        mongoUser: serviceAuthEnv.MONGO_USER,
+        mongoPassword: serviceAuthEnv.MONGO_PASSWORD,
+        neo4jUser: serviceAuthEnv.NEO4J_USER,
+        neo4jPassword: serviceAuthEnv.NEO4J_PASSWORD,
       },
       resolved.fs
     );

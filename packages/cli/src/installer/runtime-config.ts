@@ -5,6 +5,10 @@ export interface IRuntimeEnvConfig {
   embeddingMode: "flash" | "medium";
   embeddingModel: string;
   embeddingDimension: number;
+  mongoUser?: string;
+  mongoPassword?: string;
+  neo4jUser?: string;
+  neo4jPassword?: string;
 }
 
 export interface IResolvedInstallerEmbeddingConfig {
@@ -135,6 +139,10 @@ export async function writeInstallerRuntimeEnv(
     `MEMORYMESH_EMBEDDING_MODE=${config.embeddingMode}`,
     `EMBEDDING_MODEL=${config.embeddingModel}`,
     `MEMORYMESH_EMBEDDING_DIMENSION=${String(config.embeddingDimension)}`,
+    ...(config.mongoUser ? [`MONGO_USER=${config.mongoUser}`] : []),
+    ...(config.mongoPassword ? [`MONGO_PASSWORD=${config.mongoPassword}`] : []),
+    ...(config.neo4jUser ? [`NEO4J_USER=${config.neo4jUser}`] : []),
+    ...(config.neo4jPassword ? [`NEO4J_PASSWORD=${config.neo4jPassword}`] : []),
     "",
   ].join("\n");
 
