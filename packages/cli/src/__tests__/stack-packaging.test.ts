@@ -36,7 +36,10 @@ describe("stack packaging", () => {
       },
     };
 
-    const context = await ensureInstallerManagedStack("/tmp/home", fs, { cwd: "/tmp/workspace" });
+    const context = await ensureInstallerManagedStack("/tmp/home", fs, {
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "true" } as NodeJS.ProcessEnv,
+    });
     expect(context.projectDir).toBe("/tmp/home/.memorymesh/stack");
     expect(context.composeFilePath).toBe("/tmp/home/.memorymesh/stack/docker-compose.yml");
     expect(context.mode).toBe("local-dev-build");
@@ -86,6 +89,22 @@ describe("stack packaging", () => {
     const mode = resolveStackMode(fs, {
       cwd: "/tmp/workspace",
       env: { MEMORYMESH_USE_LOCAL_BUILD: "false" } as NodeJS.ProcessEnv,
+    });
+
+    expect(mode.mode).toBe("release-image");
+  });
+
+  it("uses release-image mode by default when local build flag is not set", () => {
+    const fs: IFileSystem = {
+      exists: () => true,
+      mkdir: async () => {},
+      read: async () => "",
+      write: async () => {},
+    };
+
+    const mode = resolveStackMode(fs, {
+      cwd: "/tmp/workspace",
+      env: {} as NodeJS.ProcessEnv,
     });
 
     expect(mode.mode).toBe("release-image");

@@ -9,6 +9,20 @@ export interface IStackContext {
   composeFilePath: string;
 }
 
+function parseBooleanEnv(value: string | undefined): boolean | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no") {
+    return false;
+  }
+  return undefined;
+}
+
 function dirnameForPath(filePath: string): string {
   if (path.win32.isAbsolute(filePath)) {
     return path.win32.dirname(filePath);
@@ -60,6 +74,20 @@ export function resolveStackContext(
   fs: IFileSystem = nodeFileSystem,
   homeDir: string = resolveUserHomeDir(process.platform, env)
 ): IStackContext {
+  const localBuildToggle = parseBooleanEnv(env.MEMORYMESH_USE_LOCAL_BUILD);
+  if (localBuildToggle === true) {
+    const composeFilePath = findUpwardComposeFile(cwd, fs);
+    if (!composeFilePath) {
+      throw new Error(
+        "MEMORYMESH_USE_LOCAL_BUILD=true requires docker-compose.yml in current directory or a parent directory."
+      );
+    }
+    return {
+      projectDir: dirname(composeFilePath),
+      composeFilePath,
+    };
+  }
+
   const installerManaged = resolveInstallerManagedStack(homeDir, fs);
   if (installerManaged) {
     return installerManaged;

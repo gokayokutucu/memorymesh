@@ -32,10 +32,7 @@ class FakeRunner implements ICommandRunner {
       };
     }
 
-    if (
-      key ===
-      `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} ps --status running --services`
-    ) {
+    if (/^docker compose -f .+ --project-directory .+ ps --status running --services$/.test(key)) {
       return {
         stdout: "memorymesh\nmongodb\nneo4j\nqdrant\nollama\n",
         stderr: "",
@@ -44,10 +41,7 @@ class FakeRunner implements ICommandRunner {
       };
     }
 
-    if (
-      key ===
-      `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} exec -T ollama ollama list`
-    ) {
+    if (/^docker compose -f .+ --project-directory .+ exec -T ollama ollama list$/.test(key)) {
       return {
         stdout: `NAME\n${this.activeEmbeddingModel} latest\n`,
         stderr: "",
@@ -57,8 +51,9 @@ class FakeRunner implements ICommandRunner {
     }
 
     if (
-      key ===
-      `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} exec -T memorymesh node -e process.stdout.write(process.env.EMBEDDING_MODEL ?? '')`
+      /^docker compose -f .+ --project-directory .+ exec -T memorymesh node -e process\.stdout\.write\(process\.env\.EMBEDDING_MODEL \?\? ''\)$/.test(
+        key
+      )
     ) {
       return {
         stdout: this.activeEmbeddingModel,
@@ -182,7 +177,8 @@ describe("setup wizard", () => {
     const fs: IFileSystem = {
       exists: (path: string) =>
         path.endsWith("apps/server/Dockerfile") ||
-        path.endsWith("package.json"),
+        path.endsWith("package.json") ||
+        path === "/tmp/workspace/docker-compose.yml",
       mkdir: async () => {},
       read: async () => "{}",
       write: async () => {},
@@ -204,7 +200,7 @@ describe("setup wizard", () => {
     expect(code).toBe("completed");
     expect(
       runner.calls.includes(
-        `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} up -d --build`
+        "docker compose -f /tmp/workspace/docker-compose.yml --project-directory /tmp/workspace up -d --build"
       )
     ).toBe(true);
     expect(

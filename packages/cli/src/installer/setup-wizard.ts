@@ -20,6 +20,7 @@ import {
   getInstallerHomeDir,
   getInstallerManagedComposePath,
   getInstallerManagedStackDir,
+  resolveStackMode,
 } from "./stack-packaging";
 import { rm } from "node:fs/promises";
 import { ExecaCommandRunner, ICommandRunner } from "../system/command-runner";
@@ -38,7 +39,7 @@ import {
 import { checkHttpHealth } from "../system/health";
 import { IFileSystem, nodeFileSystem } from "../system/filesystem";
 import { joinFromHome, resolveUserHomeDir } from "../system/runtime-home";
-import { IStackContext } from "../system/stack-context";
+import { IStackContext, resolveStackContext } from "../system/stack-context";
 import {
   ClackInstallerUi,
   IInstallerUi,
@@ -103,20 +104,38 @@ function resolveEmbeddingMode(
 
 async function cleanupManagedState(
   resolved: ISetupWizardDeps,
-  stackComposeExists: boolean
+  stackComposeExists: boolean,
+  activeStackContext?: IStackContext
 ): Promise<ICheckResult> {
+  if (activeStackContext) {
+    const activeCleanupResult = await downMemoryMeshStack(
+      resolved.runner,
+      activeStackContext,
+      true
+    );
+    if (!activeCleanupResult.ok) {
+      return activeCleanupResult;
+    }
+  }
+
   if (stackComposeExists) {
     const cleanupStackContext: IStackContext = {
       projectDir: getInstallerManagedStackDir(resolved.homeDir),
       composeFilePath: getInstallerManagedComposePath(resolved.homeDir),
     };
-    const cleanupResult = await downMemoryMeshStack(
-      resolved.runner,
-      cleanupStackContext,
-      true
-    );
-    if (!cleanupResult.ok) {
-      return cleanupResult;
+    const sameAsActive =
+      activeStackContext
+      && activeStackContext.projectDir === cleanupStackContext.projectDir
+      && activeStackContext.composeFilePath === cleanupStackContext.composeFilePath;
+    if (!sameAsActive) {
+      const cleanupResult = await downMemoryMeshStack(
+        resolved.runner,
+        cleanupStackContext,
+        true
+      );
+      if (!cleanupResult.ok) {
+        return cleanupResult;
+      }
     }
   }
 
@@ -136,12 +155,22 @@ export async function runSetupWizard(
   const resolved = { ...createDefaultDeps(), ...deps };
   let selectedCleanInstall = false;
   let setupCompleted = false;
+  let useLocalBuildMode = false;
+  let localBuildStackContext: IStackContext | null = null;
 
   await resolved.ui.intro("MemoryMesh first-time setup");
 
   try {
     let stackContext: IStackContext;
     let stackMode: "release-image" | "local-dev-build" = "release-image";
+    const desiredStackMode = resolveStackMode(resolved.fs, {
+      cwd: resolved.cwd,
+      env: resolved.env,
+    });
+    useLocalBuildMode = desiredStackMode.mode === "local-dev-build";
+    localBuildStackContext = useLocalBuildMode
+      ? resolveStackContext(resolved.cwd, resolved.env, resolved.fs, resolved.homeDir)
+      : null;
     let needsManagedStackCleanup = false;
     let forceFreshEmbeddingSelection = false;
 
@@ -184,7 +213,8 @@ export async function runSetupWizard(
         selectedCleanInstall = true;
         const cleanupResult = await cleanupManagedState(
           resolved,
-          dirtyState.signals.stackComposeExists
+          dirtyState.signals.stackComposeExists,
+          localBuildStackContext ?? undefined
         );
         if (!cleanupResult.ok) {
           return failWithMessage(
@@ -200,26 +230,31 @@ export async function runSetupWizard(
       }
     }
 
-    try {
-      const managedStack = await ensureInstallerManagedStack(
-        resolved.homeDir,
-        resolved.fs,
-        { cwd: resolved.cwd, env: resolved.env }
-      );
-      stackContext = managedStack;
-      stackMode = managedStack.mode;
-    } catch (error) {
-      if (needsManagedStackCleanup) {
+    if (useLocalBuildMode && localBuildStackContext) {
+      stackContext = localBuildStackContext;
+      stackMode = "local-dev-build";
+    } else {
+      try {
+        const managedStack = await ensureInstallerManagedStack(
+          resolved.homeDir,
+          resolved.fs,
+          { cwd: resolved.cwd, env: resolved.env }
+        );
+        stackContext = managedStack;
+        stackMode = managedStack.mode;
+      } catch (error) {
+        if (needsManagedStackCleanup) {
+          return failWithMessage(
+            resolved.ui,
+            `Unable to recreate installer-managed stack after cleanup: ${String(error)}`
+          );
+        }
+
         return failWithMessage(
           resolved.ui,
-          `Unable to recreate installer-managed stack after cleanup: ${String(error)}`
+          `Unable to prepare installer-managed stack: ${String(error)}`
         );
       }
-
-      return failWithMessage(
-        resolved.ui,
-        `Unable to prepare installer-managed stack: ${String(error)}`
-      );
     }
 
     let existingDimension: number | null = null;
@@ -259,20 +294,31 @@ export async function runSetupWizard(
 
           const cleanupResult = await cleanupManagedState(
             resolved,
-            resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir))
+            resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir)),
+            useLocalBuildMode ? stackContext : undefined
           );
           if (!cleanupResult.ok) {
             throw new Error(`Unable to reset managed state for new embedding model: ${cleanupResult.message}`);
           }
           needsManagedStackCleanup = true;
           await resolved.ui.note("Reset complete. Continuing setup with new embedding model.");
-          const refreshedManagedStack = await ensureInstallerManagedStack(
-            resolved.homeDir,
-            resolved.fs,
-            { cwd: resolved.cwd, env: resolved.env }
-          );
-          stackContext = refreshedManagedStack;
-          stackMode = refreshedManagedStack.mode;
+          if (useLocalBuildMode) {
+            stackContext = resolveStackContext(
+              resolved.cwd,
+              resolved.env,
+              resolved.fs,
+              resolved.homeDir
+            );
+            stackMode = "local-dev-build";
+          } else {
+            const refreshedManagedStack = await ensureInstallerManagedStack(
+              resolved.homeDir,
+              resolved.fs,
+              { cwd: resolved.cwd, env: resolved.env }
+            );
+            stackContext = refreshedManagedStack;
+            stackMode = refreshedManagedStack.mode;
+          }
         },
       });
     } catch (error) {
@@ -469,7 +515,8 @@ export async function runSetupWizard(
     if (selectedCleanInstall && !setupCompleted) {
       const rollbackCleanup = await cleanupManagedState(
         resolved,
-        resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir))
+        resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir)),
+        useLocalBuildMode ? localBuildStackContext ?? undefined : undefined
       );
       if (!rollbackCleanup.ok) {
         await resolved.ui.note(

@@ -2,6 +2,45 @@ import { resolveStackContext } from "../system/stack-context";
 import { IFileSystem } from "../system/filesystem";
 
 describe("stack context resolution", () => {
+  it("uses repo-local compose context when MEMORYMESH_USE_LOCAL_BUILD=true", () => {
+    const fs: IFileSystem = {
+      exists: (path) =>
+        path === "/home/test/.memorymesh/stack/docker-compose.yml"
+        || path === "/repo/docker-compose.yml",
+      mkdir: async () => {},
+      read: async () => "",
+      write: async () => {},
+    };
+
+    const context = resolveStackContext(
+      "/repo/apps/cli",
+      { MEMORYMESH_USE_LOCAL_BUILD: "true" },
+      fs,
+      "/home/test"
+    );
+
+    expect(context.projectDir).toBe("/repo");
+    expect(context.composeFilePath).toBe("/repo/docker-compose.yml");
+  });
+
+  it("throws clear error when MEMORYMESH_USE_LOCAL_BUILD=true and compose is missing", () => {
+    const fs: IFileSystem = {
+      exists: (path) => path === "/home/test/.memorymesh/stack/docker-compose.yml",
+      mkdir: async () => {},
+      read: async () => "",
+      write: async () => {},
+    };
+
+    expect(() =>
+      resolveStackContext(
+        "/repo/apps/cli",
+        { MEMORYMESH_USE_LOCAL_BUILD: "true" },
+        fs,
+        "/home/test"
+      )
+    ).toThrow("MEMORYMESH_USE_LOCAL_BUILD=true requires docker-compose.yml");
+  });
+
   it("prefers installer-managed stack over environment hints", () => {
     const fs: IFileSystem = {
       exists: (path) =>

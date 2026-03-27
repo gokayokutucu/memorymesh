@@ -226,14 +226,6 @@ export function resolveStackMode(
     };
   }
 
-  const autoContext = resolveLocalBuildContext(cwd, fs);
-  if (autoContext) {
-    return {
-      mode: "local-dev-build",
-      localBuildContext: autoContext,
-    };
-  }
-
   return { mode: "release-image" };
 }
 
