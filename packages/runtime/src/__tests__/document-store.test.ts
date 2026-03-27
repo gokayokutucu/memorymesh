@@ -118,4 +118,20 @@ describe("document-store", () => {
     expect(saved).toBe(true);
     expect(mockUpdateOne).toHaveBeenCalledTimes(2);
   });
+
+  it("resolves mongo credentials at call time when env is set after module import", async () => {
+    delete process.env.MONGO_USER;
+    delete process.env.MONGO_PASSWORD;
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { saveDocument } = await import("../document-store");
+    process.env.MONGO_USER = "late-user";
+    process.env.MONGO_PASSWORD = "late-password";
+
+    const saved = await saveDocument("id-late", "late content", { project: "MemoryMesh" });
+
+    expect(saved).toBe(true);
+    expect(mockConnect).toHaveBeenCalledTimes(1);
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
 });

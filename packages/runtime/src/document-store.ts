@@ -4,13 +4,30 @@ import {
   isTransientMongoError,
 } from "./resilience";
 
-const MONGO_HOST = process.env.MONGO_HOST ?? "localhost";
-const MONGO_PORT = process.env.MONGO_PORT ?? "27017";
-const MONGO_DB = process.env.MONGO_DB ?? "memorymesh";
-const MONGO_USER = process.env.MONGO_USER;
-const MONGO_PASSWORD = process.env.MONGO_PASSWORD;
 const COLLECTION = "documents";
-const URI = `mongodb://${encodeURIComponent(MONGO_USER ?? "")}:${encodeURIComponent(MONGO_PASSWORD ?? "")}@${MONGO_HOST}:${MONGO_PORT}/?authSource=admin`;
+
+interface IMongoConfig {
+  uri: string;
+  database: string;
+  user?: string;
+  password?: string;
+}
+
+function resolveMongoConfig(env: NodeJS.ProcessEnv = process.env): IMongoConfig {
+  const host = env.MONGO_HOST ?? "localhost";
+  const port = env.MONGO_PORT ?? "27017";
+  const database = env.MONGO_DB ?? "memorymesh";
+  const user = env.MONGO_USER;
+  const password = env.MONGO_PASSWORD;
+  const uri = `mongodb://${encodeURIComponent(user ?? "")}:${encodeURIComponent(password ?? "")}@${host}:${port}/?authSource=admin`;
+
+  return {
+    uri,
+    database,
+    user,
+    password,
+  };
+}
 
 interface IDocumentRecord {
   _id: string;
@@ -37,11 +54,12 @@ async function getCollection(): Promise<Collection<IDocumentRecord> | null> {
   }
 
   try {
-    if (!MONGO_USER || !MONGO_PASSWORD) {
+    const config = resolveMongoConfig();
+    if (!config.user || !config.password) {
       throw new Error("MONGO_USER and MONGO_PASSWORD are required.");
     }
     if (!client) {
-      client = new MongoClient(URI);
+      client = new MongoClient(config.uri);
     }
     if (!database) {
       await executeWithRetry(
@@ -53,7 +71,7 @@ async function getCollection(): Promise<Collection<IDocumentRecord> | null> {
           transientFailureCode: "mongo_transient_failure",
         }
       );
-      database = client.db(MONGO_DB);
+      database = client.db(config.database);
     }
     collection = database.collection<IDocumentRecord>(COLLECTION);
     await executeWithRetry(

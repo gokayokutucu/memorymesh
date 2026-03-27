@@ -198,4 +198,22 @@ describe("graph-store query functions", () => {
     expect(ids).toEqual(["m-7"]);
     expect(mockRun).toHaveBeenCalledTimes(2);
   });
+
+  it("resolves neo4j credentials at call time when env is set after module import", async () => {
+    delete process.env.NEO4J_USER;
+    delete process.env.NEO4J_PASSWORD;
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const graphStore = await import("../graph-store");
+    process.env.NEO4J_USER = "late-user";
+    process.env.NEO4J_PASSWORD = "late-password";
+    mockRun.mockResolvedValue({
+      records: [{ get: (key: string) => (key === "id" ? "m-late" : "2026-03-10T00:00:00Z") }],
+    });
+
+    const ids = await graphStore.queryByTags(["late"], 1);
+
+    expect(ids).toEqual(["m-late"]);
+    expect(mockAuthBasic).toHaveBeenCalledWith("late-user", "late-password");
+    warnSpy.mockRestore();
+  });
 });
