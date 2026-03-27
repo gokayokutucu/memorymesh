@@ -2,6 +2,7 @@
 
 import { isMemoryMeshInstalled } from "./installer/first-run";
 import { runSetupWizard } from "./installer/setup-wizard";
+import { readInstallerRuntimeEnv } from "./installer/runtime-config";
 import { resolveUserHomeDir } from "./system/runtime-home";
 import { style } from "./terminal-style";
 import { renderSearchResultLines } from "./commands/search";
@@ -24,23 +25,51 @@ function printMainHelp(): void {
   console.log("");
 }
 
+function mergeRuntimeEnvIntoProcess(runtimeEnv: NodeJS.ProcessEnv): void {
+  for (const [key, value] of Object.entries(runtimeEnv)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    process.env[key] = trimmed;
+  }
+}
+
+async function loadInstallerRuntimeEnv(homeDir: string): Promise<void> {
+  try {
+    const runtimeEnv = await readInstallerRuntimeEnv(homeDir);
+    mergeRuntimeEnvIntoProcess(runtimeEnv);
+  } catch {
+    // Runtime env is optional before setup; commands will fail with explicit errors if required vars are missing.
+  }
+}
+
 export async function runMain(argv: string[]): Promise<number> {
+  let homeDir: string;
+  try {
+    homeDir = resolveUserHomeDir(process.platform, process.env);
+  } catch (error) {
+    console.error(style.error(String(error)));
+    return 1;
+  }
+
+  await loadInstallerRuntimeEnv(homeDir);
+
   if (argv.length === 0) {
     console.log(style.renderTitle());
-
-    let homeDir: string;
-    try {
-      homeDir = resolveUserHomeDir(process.platform, process.env);
-    } catch (error) {
-      console.error(style.error(String(error)));
-      return 1;
-    }
 
     if (!isMemoryMeshInstalled(homeDir)) {
       const setupResult = await runSetupWizard();
       if (setupResult === "cancelled") {
         return 0;
       }
+
+      await loadInstallerRuntimeEnv(homeDir);
     }
 
     const { runRuntimeMenu } = await import("./commands/menu");

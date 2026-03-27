@@ -45,6 +45,10 @@ jest.mock("../installer/setup-wizard", () => ({
   runSetupWizard: jest.fn(),
 }));
 
+jest.mock("../installer/runtime-config", () => ({
+  readInstallerRuntimeEnv: jest.fn(),
+}));
+
 import { runMain } from "../main";
 import { runImportGptCommand } from "../commands/import-gpt";
 import { runImportDocumentsCommand } from "../commands/import-documents";
@@ -61,6 +65,7 @@ import { runUpgradeCommand } from "../commands/upgrade";
 import { resolveUserHomeDir } from "../system/runtime-home";
 import { isMemoryMeshInstalled } from "../installer/first-run";
 import { runSetupWizard } from "../installer/setup-wizard";
+import { readInstallerRuntimeEnv } from "../installer/runtime-config";
 
 const mockedRunImportGptCommand = runImportGptCommand as jest.MockedFunction<
   typeof runImportGptCommand
@@ -96,12 +101,20 @@ const mockedIsMemoryMeshInstalled = isMemoryMeshInstalled as jest.MockedFunction
   typeof isMemoryMeshInstalled
 >;
 const mockedRunSetupWizard = runSetupWizard as jest.MockedFunction<typeof runSetupWizard>;
+const mockedReadInstallerRuntimeEnv = readInstallerRuntimeEnv as jest.MockedFunction<
+  typeof readInstallerRuntimeEnv
+>;
 
 describe("main CLI router", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedResolveUserHomeDir.mockReturnValue("/home/test");
     mockedRunRuntimeMenu.mockResolvedValue(0);
+    mockedReadInstallerRuntimeEnv.mockResolvedValue({});
+    delete process.env.MONGO_USER;
+    delete process.env.MONGO_PASSWORD;
+    delete process.env.NEO4J_USER;
+    delete process.env.NEO4J_PASSWORD;
   });
 
   it("runs setup on first launch", async () => {
@@ -178,6 +191,51 @@ describe("main CLI router", () => {
       "--path",
       "/tmp/docs",
     ]);
+  });
+
+  it("loads installer runtime credentials before direct import command execution", async () => {
+    mockedReadInstallerRuntimeEnv.mockResolvedValue({
+      MONGO_USER: "mongo-user",
+      MONGO_PASSWORD: "mongo-pass",
+      NEO4J_USER: "neo4j-user",
+      NEO4J_PASSWORD: "neo4j-pass",
+    });
+    mockedRunImportDocumentsCommand.mockImplementation(async () => {
+      expect(process.env.MONGO_USER).toBe("mongo-user");
+      expect(process.env.MONGO_PASSWORD).toBe("mongo-pass");
+      expect(process.env.NEO4J_USER).toBe("neo4j-user");
+      expect(process.env.NEO4J_PASSWORD).toBe("neo4j-pass");
+      return 0;
+    });
+
+    const code = await runMain(["import:documents", "--path", "/tmp/docs"]);
+
+    expect(code).toBe(0);
+  });
+
+  it("reloads installer runtime env after setup before entering runtime menu", async () => {
+    mockedIsMemoryMeshInstalled.mockReturnValue(false);
+    mockedRunSetupWizard.mockResolvedValue("completed");
+    mockedReadInstallerRuntimeEnv
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        MONGO_USER: "mongo-user",
+        MONGO_PASSWORD: "mongo-pass",
+        NEO4J_USER: "neo4j-user",
+        NEO4J_PASSWORD: "neo4j-pass",
+      });
+    mockedRunRuntimeMenu.mockImplementation(async () => {
+      expect(process.env.MONGO_USER).toBe("mongo-user");
+      expect(process.env.MONGO_PASSWORD).toBe("mongo-pass");
+      expect(process.env.NEO4J_USER).toBe("neo4j-user");
+      expect(process.env.NEO4J_PASSWORD).toBe("neo4j-pass");
+      return 0;
+    });
+
+    const code = await runMain([]);
+
+    expect(code).toBe(0);
+    expect(mockedReadInstallerRuntimeEnv).toHaveBeenCalledTimes(2);
   });
 
   it("routes doctor command", async () => {
