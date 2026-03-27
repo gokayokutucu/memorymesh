@@ -1,6 +1,6 @@
 {
   "name": "memorymesh",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "MemoryMesh CLI installer and runtime menu for managing local MemoryMesh stack",
   "license": "MIT",
   "repository": {

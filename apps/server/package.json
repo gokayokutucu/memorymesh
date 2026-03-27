@@ -1,6 +1,6 @@
 {
   "name": "@memorymesh/server",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local-first MCP memory server for Claude",
   "main": "dist/index.js",
   "scripts": {
