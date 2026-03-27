@@ -107,16 +107,16 @@ function createStackComposeContent(options: IStackComposeOptions): string {
   return `services:
   qdrant:
     image: qdrant/qdrant:latest
-    expose:
-      - "6333"
+    ports:
+      - "\${QDRANT_PORT:-6333}:6333"
     volumes:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
-    expose:
-      - "11434"
+    ports:
+      - "\${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_models:/root/.ollama
     restart: unless-stopped
@@ -142,8 +142,8 @@ function createStackComposeContent(options: IStackComposeOptions): string {
 
   mongodb:
     image: mongo:7
-    expose:
-      - "27017"
+    ports:
+      - "\${MONGO_PORT:-27017}:27017"
     environment:
       - MONGO_INITDB_DATABASE=memorymesh
       - MONGO_INITDB_ROOT_USERNAME=\${MONGO_USER}
@@ -154,9 +154,9 @@ function createStackComposeContent(options: IStackComposeOptions): string {
 
   neo4j:
     image: neo4j:5
-    expose:
-      - "7474"
-      - "7687"
+    ports:
+      - "\${NEO4J_HTTP_PORT:-7474}:7474"
+      - "\${NEO4J_BOLT_PORT:-7687}:7687"
     environment:
       - NEO4J_AUTH=neo4j/\${NEO4J_PASSWORD}
     volumes:
