@@ -9,13 +9,13 @@ MemoryMesh is a local-first memory stack for AI workflows. It ships a CLI (`memo
 Global npm install:
 
 ```bash
-npm install -g memorymesh
+npm install -g @okutucu/memorymesh
 memorymesh
 ```
 
 Notes:
 
-- Package name is `memorymesh`
+- Package name is `@okutucu/memorymesh`
 - First run launches interactive setup if `~/.memorymesh/config.json` is missing
 - Published tarball includes required internal runtime modules for standalone install
 
@@ -131,13 +131,7 @@ Run modes:
 - Interactive: run `memorymesh`, then choose `Import documents`
 - Direct command: `memorymesh import:documents --path <file-or-folder> [options]`
 
-Project scoping:
-
-- Dedup and resume are project-scoped
-- Re-importing the same dataset into the same project with `skip_existing` avoids duplicate writes
-- Importing the same dataset into a different project creates a separate memory namespace
-
-Detailed document-import limits, policies, and checkpoint behavior are documented in [`packages/cli/README.md`](./packages/cli/README.md).
+Detailed document-import limits, policies, project scoping, and checkpoint behavior are documented in [`packages/cli/README.md`](./packages/cli/README.md).
 
 ## Claude MCP Integration
 
@@ -219,13 +213,13 @@ Do not try to fix mismatch by manually exporting embedding environment variables
 - Use script guidance output to install Node/npm manually, then rerun script
 
 9. `memorymesh` command not found after install
-- Verify npm global bin is on `PATH`; reinstall with `npm install -g memorymesh`
+- Verify npm global bin is on `PATH`; reinstall with `npm install -g @okutucu/memorymesh`
 
 10. npm install succeeds but runtime stack is unhealthy
 - Run `memorymesh doctor` for root cause, then `memorymesh doctor --fix` for safe repairs and recheck
 
 11. self-contained tarball/global install reports `EEXIST` binary conflict
-- Remove conflicting global binary/package, or reinstall with a clean prefix, then run `npm install -g memorymesh`
+- Remove conflicting global binary/package, or reinstall with a clean prefix, then run `npm install -g @okutucu/memorymesh`
 
 ## Development / Monorepo Notes
 
@@ -241,12 +235,12 @@ Useful development commands:
 ```bash
 npm run build
 npm test
-npm run build -w memorymesh
-npm test -w memorymesh
+npm run build -w @okutucu/memorymesh
+npm test -w @okutucu/memorymesh
 ```
 
 Release/distribution notes (current state):
 
-- npm package target: `memorymesh`
+- npm package target: `@okutucu/memorymesh`
 - bootstrap scripts are published as release assets (`install.sh`, `install.ps1`)
 - release automation is scaffolded; treat it as evolving, not fully hands-off

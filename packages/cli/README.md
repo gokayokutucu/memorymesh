@@ -11,14 +11,14 @@ MemoryMesh CLI provides:
 ## Usage
 
 ```bash
-npm install -g memorymesh
+npm install -g @okutucu/memorymesh
 memorymesh
 ```
 
 Release stack notes:
 
 - installer-managed compose lives at `~/.memorymesh/stack/docker-compose.yml`
-- default server image is `ghcr.io/memorymesh/server:latest`
+- default server image is `ghcr.io/gokayokutucu/memorymesh-server:latest`
 - override with `MEMORYMESH_SERVER_IMAGE=...` when running `memorymesh start` or setup
 
 ## Embedding Configuration
@@ -66,7 +66,7 @@ memorymesh import:gpt --file <file-or-folder> [options]
 Development script alias remains available:
 
 ```bash
-npm run -w memorymesh import:gpt -- --path <file-or-folder> [options]
+npm run -w @okutucu/memorymesh import:gpt -- --path <file-or-folder> [options]
 ```
 
 Direct command mode (documents):
@@ -439,7 +439,7 @@ memorymesh import:gpt \
 | `--dry-run` | Evaluate and report without writing memories. |
 | `--delay-ms <n>` | Delay between conversations in milliseconds. Default: `3000`. |
 | `--verbose` | Show detailed per-message dry-run/import logs. |
-| `--engine <ts\|rust>` | Select extraction engine. Default: `ts`. |
+| `--engine <ts\|rust>` | Select extraction engine. Default: `rust`. |
 | `--rust-bin <path>` | Optional explicit Rust engine binary path. |
 | `--import-policy <skip_existing\|overwrite_existing\|import_anyway>` | Dedup/import policy. Default: `skip_existing`. |
 | `--limit <n>` | Import only first `n` conversations after scan/classification. |

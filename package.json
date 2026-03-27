@@ -9,7 +9,7 @@
     "build": "npm run build -w @memorymesh/core && npm run build -w @memorymesh/runtime && npm run build -w @memorymesh/server && npm run build -w @okutucu/memorymesh",
     "test": "npm run test --workspaces --if-present",
     "docker:build": "docker compose build",
-    "release:check": "npm run -w memorymesh pack:check && npm run -w memorymesh publish:check"
+    "release:check": "npm run -w @okutucu/memorymesh pack:check && npm run -w @okutucu/memorymesh publish:check"
   },
   "version": "0.0.1"
 }
