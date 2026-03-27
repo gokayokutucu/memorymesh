@@ -6,7 +6,7 @@ MemoryMesh CLI provides:
 - managed Docker stack lifecycle (`start/stop/reset/uninstall`)
 - doctor diagnostics and safe repairs (`doctor --fix`)
 - Claude Desktop MCP integration
-- import tools (`import:gpt`)
+- import tools (`import:gpt`, `import:documents`)
 
 ## Usage
 
@@ -51,7 +51,7 @@ To force interactive dry-run mode:
 MEMORYMESH_INTERACTIVE_DRY_RUN=true memorymesh
 ```
 
-Direct command mode:
+Direct command mode (GPT):
 
 ```bash
 memorymesh import:gpt --path <file-or-folder> [options]
@@ -67,6 +67,12 @@ Development script alias remains available:
 
 ```bash
 npm run -w memorymesh import:gpt -- --path <file-or-folder> [options]
+```
+
+Direct command mode (documents):
+
+```bash
+memorymesh import:documents --path <file-or-folder> [options]
 ```
 
 ## Output Behavior
@@ -114,7 +120,7 @@ Scan results are printed as a deterministic ASCII table:
 +---------------------------------+-------+
 ```
 
-## Import Policies
+## Import Policies (GPT Import)
 
 Supported policies:
 
@@ -124,6 +130,106 @@ Supported policies:
   - `overwrite_existing_not_supported`
 
 `overwrite_existing` is intentionally explicit and not treated as a true overwrite operation yet.
+
+## Document Import
+
+Document import ingests local files into MemoryMesh for source-aware retrieval.
+
+What it does:
+
+- accepts a single file or a folder path
+- recursively scans folders
+- parses supported file types
+- chunks large text content
+- writes memories with structured source metadata (filename/path/extension/chunk info)
+
+Supported formats:
+
+- `.txt`
+- `.md`
+- `.csv`
+- `.json`
+- `.jsonl`
+- `.ndjson`
+
+Unsupported files are skipped and reported in the final summary.
+
+### Limits (defaults)
+
+Document import reads limits from MemoryMesh config (`~/.memorymesh/config.json`, `documentImportLimits`).
+If no overrides are set, defaults are:
+
+- `max_file_size_mb`: `5`
+- `max_chars_per_file`: `100000`
+- `max_chunks_per_file`: `200`
+- `chunk_size`: `1200`
+- `chunk_overlap`: `150`
+
+### Run It
+
+Interactive:
+
+```bash
+memorymesh
+# choose: Import documents
+```
+
+Direct command:
+
+```bash
+# import a folder recursively
+memorymesh import:documents \
+  --path ~/Downloads/document-import \
+  --project MemoryMesh \
+  --import-policy skip_existing
+
+# import a single file
+memorymesh import:documents \
+  --path ~/Documents/notes/guide.md \
+  --project DocsProject \
+  --import-policy overwrite_existing
+```
+
+### Project Scope
+
+Document import dedup and resume behavior are scoped by project.
+
+- Same dataset + same project + `skip_existing`: previously imported chunks are skipped.
+- Same dataset + different project: treated as a separate namespace and imported independently.
+- This allows importing the same files into multiple projects intentionally.
+
+### Document Import Policies
+
+Supported policies for `import:documents`:
+
+- `skip_existing` (default): skip chunks that already exist for the same project/ref.
+- `import_anyway`: import regardless of existing matching refs.
+- `overwrite_existing`: replace existing matching chunks for the same project/ref, then import updated chunks.
+
+### Resume and Checkpoints
+
+Document import uses local checkpoints to resume interrupted runs.
+
+- checkpoint files live under `~/.memorymesh/checkpoints/`
+- mode-isolated:
+  - `document-import-dry-run-...json`
+  - `document-import-real-...json`
+- checkpoint identity includes embedding mode/model/dimension
+- interrupted runs can resume from the last advanced chunk position
+- after embedding reset/clean install, stale checkpoints are not reused incorrectly for incompatible embedding identity
+
+### Searchability and Source Metadata
+
+Document-imported memories carry source metadata used in retrieval/search output, including:
+
+- filename
+- source path
+- relative path
+- source extension/type
+- chunk index / chunk total
+- project and deterministic ref id
+
+These fields are preserved as structured metadata and can be surfaced in search results and source-aware filtering.
 
 ## Import Audit Log
 

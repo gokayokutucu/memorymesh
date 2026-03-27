@@ -2,7 +2,7 @@
 
 ## What is MemoryMesh
 
-MemoryMesh is a local-first memory stack for AI workflows. It ships a CLI (`memorymesh`) that installs and manages a Docker-based runtime (MemoryMesh API, MongoDB, Neo4j, Qdrant, Ollama), plus CLI flows for setup, diagnostics, lifecycle, and GPT archive import.
+MemoryMesh is a local-first memory stack for AI workflows. It ships a CLI (`memorymesh`) that installs and manages a Docker-based runtime (MemoryMesh API, MongoDB, Neo4j, Qdrant, Ollama), plus CLI flows for setup, diagnostics, lifecycle, GPT archive import, and document import.
 
 ## Install
 
@@ -111,6 +111,33 @@ Advanced note:
 | `memorymesh upgrade` | Upgrade scaffold command | Future upgrade path | Placeholder/scaffold in current phase |
 | `memorymesh mcp` | Starts MCP stdio bridge | Claude/Desktop or MCP client integration | Long-running foreground process |
 | `memorymesh import:gpt --path <file-or-folder>` | Imports ChatGPT export JSON/ZIP paths | Bring existing chat memory into MemoryMesh | Requires runtime availability and valid source files |
+| `memorymesh import:documents --path <file-or-folder>` | Imports local documents (file or folder) | Ingest notes, markdown, CSV/JSON datasets, and searchable project docs | Recursive folder scan; unsupported files are skipped |
+
+## Document Import
+
+`import:documents` imports local files into MemoryMesh, recursively scans folders, parses supported formats, chunks text-based content where needed, and stores source metadata for source-aware search/retrieval.
+
+Supported formats:
+
+- `.txt`
+- `.md`
+- `.csv`
+- `.json`
+- `.jsonl`
+- `.ndjson`
+
+Run modes:
+
+- Interactive: run `memorymesh`, then choose `Import documents`
+- Direct command: `memorymesh import:documents --path <file-or-folder> [options]`
+
+Project scoping:
+
+- Dedup and resume are project-scoped
+- Re-importing the same dataset into the same project with `skip_existing` avoids duplicate writes
+- Importing the same dataset into a different project creates a separate memory namespace
+
+Detailed document-import limits, policies, and checkpoint behavior are documented in [`packages/cli/README.md`](./packages/cli/README.md).
 
 ## Claude MCP Integration
 
