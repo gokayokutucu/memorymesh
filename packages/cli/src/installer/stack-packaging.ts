@@ -184,7 +184,7 @@ function createStackComposeContent(options: IStackComposeOptions): string {
       - /bin/sh
       - -ec
       - |
-        cat >/usr/local/etc/haproxy/haproxy.cfg <<'EOF'
+        cat >/tmp/haproxy.cfg <<'EOF'
         global
           log stdout format raw local0
         defaults
@@ -218,7 +218,7 @@ function createStackComposeContent(options: IStackComposeOptions): string {
         backend neo4j_bolt_back
           server neo4j_bolt neo4j:7687
         EOF
-        exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg
+        exec haproxy -W -db -f /tmp/haproxy.cfg
     restart: unless-stopped
 
 ${memoryMeshService}
