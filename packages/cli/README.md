@@ -75,6 +75,53 @@ Direct command mode (documents):
 memorymesh import:documents --path <file-or-folder> [options]
 ```
 
+## Claude Custom Instructions
+
+Important:
+
+- Claude can still use MemoryMesh as a fallback without custom instructions, but memory usage becomes less efficient and less consistent.
+- Adding the recommended instructions below is strongly recommended for reliable save/search behavior.
+- Each `If MemoryMesh tools are available...` block consumes one Claude instruction slot.
+
+Recommended instructions:
+
+```text
+If MemoryMesh tools are available, use save_memory when: a decision is made (technical, personal, or workflow-related), something is learned or a bug is debugged, a preference or working style is clarified, or an important output is produced (code, email, document, plan, summary). Also save when the user says "remember this". Format every entry as: [INPUT] the user's request or question / [OUTPUT] the response, result, or artifact produced. No topic restriction.
+```
+
+```text
+If MemoryMesh tools are available, use search_memory proactively before generating a response if the topic might have relevant past context. Always search when: a new conversation starts and context feels missing, the user references something from a previous session ("last time", "we decided", "remember when"), or the current topic overlaps with decisions or outputs that may have been saved before. Trust the results — if a memory is retrieved, factor it into your answer.
+```
+
+## Tool Modes
+
+MemoryMesh tool access can be configured for different usage patterns:
+
+- `read-write` (default): normal full mode. Use when Claude should both retrieve past context and save new memories.
+- `search-only`: use when retrieval is desired but writes must be disabled.
+- `write-only`: use when capture is desired but retrieval must be disabled.
+
+Configuration:
+
+```bash
+# read-write (default)
+MEMORYMESH_MEMORY_READ_ENABLED=true
+MEMORYMESH_MEMORY_WRITE_ENABLED=true
+
+# search-only
+MEMORYMESH_MEMORY_READ_ENABLED=true
+MEMORYMESH_MEMORY_WRITE_ENABLED=false
+
+# write-only
+MEMORYMESH_MEMORY_READ_ENABLED=false
+MEMORYMESH_MEMORY_WRITE_ENABLED=true
+```
+
+After changing tool mode:
+
+- restart `memorymesh mcp` or the managed runtime
+- reconnect Claude Desktop so tool availability refreshes
+
 ## Output Behavior
 
 - Default mode is quiet.

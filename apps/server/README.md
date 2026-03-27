@@ -224,18 +224,7 @@ MCP tool registration now follows memory mode at startup:
 Important:
 - restart the server after `.env` mode changes
 - reconnect MCP clients (Claude Desktop may cache tool availability until reconnect)
-
-Mode examples:
-
-```bash
-# read-write (default)
-MEMORYMESH_MEMORY_READ_ENABLED=true
-MEMORYMESH_MEMORY_WRITE_ENABLED=true
-
-# read-only
-MEMORYMESH_MEMORY_READ_ENABLED=true
-MEMORYMESH_MEMORY_WRITE_ENABLED=false
-```
+- operational Claude/Desktop mode guidance lives in [`packages/cli/README.md`](../../packages/cli/README.md)
 
 Importer note:
 - GPT import is an administrative path and bypasses `MEMORYMESH_MEMORY_WRITE_ENABLED` so imports can still write memory.

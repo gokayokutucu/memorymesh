@@ -135,6 +135,11 @@ Detailed document-import limits, policies, project scoping, and checkpoint behav
 
 ## Claude MCP Integration
 
+Important:
+
+- Claude can work with MemoryMesh without custom instructions, but save/search behavior is less efficient and less consistent.
+- Canonical Claude custom instruction guidance and MemoryMesh tool mode configuration live in [`packages/cli/README.md`](./packages/cli/README.md).
+
 Setup can patch Claude Desktop config with:
 
 ```json
