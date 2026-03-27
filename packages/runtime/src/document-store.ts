@@ -10,10 +10,7 @@ const MONGO_DB = process.env.MONGO_DB ?? "memorymesh";
 const MONGO_USER = process.env.MONGO_USER;
 const MONGO_PASSWORD = process.env.MONGO_PASSWORD;
 const COLLECTION = "documents";
-const URI =
-  MONGO_USER && MONGO_PASSWORD
-    ? `mongodb://${encodeURIComponent(MONGO_USER)}:${encodeURIComponent(MONGO_PASSWORD)}@${MONGO_HOST}:${MONGO_PORT}/?authSource=admin`
-    : `mongodb://${MONGO_HOST}:${MONGO_PORT}`;
+const URI = `mongodb://${encodeURIComponent(MONGO_USER ?? "")}:${encodeURIComponent(MONGO_PASSWORD ?? "")}@${MONGO_HOST}:${MONGO_PORT}/?authSource=admin`;
 
 interface IDocumentRecord {
   _id: string;
@@ -40,6 +37,9 @@ async function getCollection(): Promise<Collection<IDocumentRecord> | null> {
   }
 
   try {
+    if (!MONGO_USER || !MONGO_PASSWORD) {
+      throw new Error("MONGO_USER and MONGO_PASSWORD are required.");
+    }
     if (!client) {
       client = new MongoClient(URI);
     }

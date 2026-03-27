@@ -17,6 +17,8 @@ jest.mock("mongodb", () => ({
 beforeEach(() => {
   jest.resetModules();
   jest.clearAllMocks();
+  process.env.MONGO_USER = "mongo-user";
+  process.env.MONGO_PASSWORD = "mongo-password";
   mockCreateIndex.mockResolvedValue("documents__id");
   mockUpdateOne.mockResolvedValue(undefined);
   mockFindOne.mockResolvedValue(null);
