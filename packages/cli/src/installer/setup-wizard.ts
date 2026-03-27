@@ -292,6 +292,9 @@ export async function runSetupWizard(
         ? `Using repo-local stack mode (local-dev-build): ${stackContext.composeFilePath}`
         : `Using installer-managed stack mode (release-image): ${stackContext.composeFilePath}`
     );
+    await resolved.ui.note(
+      "Service endpoints are exposed through the stack gateway (Qdrant/Ollama/MongoDB/Neo4j)."
+    );
 
     let existingDimension: number | null = null;
     if (!forceFreshEmbeddingSelection) {

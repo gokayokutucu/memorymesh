@@ -1,15 +1,15 @@
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    ports:
-      - "${QDRANT_PORT:-6333}:6333"
+    expose:
+      - "6333"
     volumes:
       - qdrant_storage:/qdrant/storage
 
   ollama:
     image: ollama/ollama:latest
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
+    expose:
+      - "11434"
     volumes:
       - ollama_models:/root/.ollama
 
@@ -34,8 +34,8 @@ services:
 
   mongodb:
     image: mongo:7
-    ports:
-      - "${MONGO_PORT:-27017}:27017"
+    expose:
+      - "27017"
     environment:
       - MONGO_INITDB_DATABASE=memorymesh
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
@@ -45,13 +45,70 @@ services:
 
   neo4j:
     image: neo4j:5
-    ports:
-      - "${NEO4J_HTTP_PORT:-7474}:7474"
-      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    expose:
+      - "7474"
+      - "7687"
     environment:
       - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
     volumes:
       - neo4j_data:/data
+
+  gateway:
+    image: haproxy:3.0-alpine
+    depends_on:
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+      mongodb:
+        condition: service_started
+      neo4j:
+        condition: service_started
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${OLLAMA_PORT:-11434}:11434"
+      - "${MONGO_PORT:-27017}:27017"
+      - "${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        cat >/usr/local/etc/haproxy/haproxy.cfg <<'EOF'
+        global
+          log stdout format raw local0
+        defaults
+          mode tcp
+          timeout connect 5s
+          timeout client 60s
+          timeout server 60s
+        frontend qdrant_front
+          bind *:6333
+          default_backend qdrant_back
+        backend qdrant_back
+          server qdrant qdrant:6333
+        frontend ollama_front
+          bind *:11434
+          default_backend ollama_back
+        backend ollama_back
+          server ollama ollama:11434
+        frontend mongo_front
+          bind *:27017
+          default_backend mongo_back
+        backend mongo_back
+          server mongodb mongodb:27017
+        frontend neo4j_http_front
+          bind *:7474
+          default_backend neo4j_http_back
+        backend neo4j_http_back
+          server neo4j_http neo4j:7474
+        frontend neo4j_bolt_front
+          bind *:7687
+          default_backend neo4j_bolt_back
+        backend neo4j_bolt_back
+          server neo4j_bolt neo4j:7687
+        EOF
+        exec haproxy -W -db -f /usr/local/etc/haproxy/haproxy.cfg
 
   memorymesh:
     build:

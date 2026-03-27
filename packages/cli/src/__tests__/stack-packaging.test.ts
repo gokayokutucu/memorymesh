@@ -56,6 +56,16 @@ describe("stack packaging", () => {
     expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
       "NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}"
     );
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain("  gateway:");
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
+      "image: haproxy:3.0-alpine"
+    );
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
+      "expose:\n      - \"6333\""
+    );
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
+      "ports:\n      - \"${QDRANT_PORT:-6333}:6333\""
+    );
     expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).not.toContain(
       "NEO4J_AUTH=none"
     );
