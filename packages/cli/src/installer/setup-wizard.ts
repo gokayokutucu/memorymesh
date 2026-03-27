@@ -287,6 +287,11 @@ export async function runSetupWizard(
         );
       }
     }
+    await resolved.ui.note(
+      stackMode === "local-dev-build"
+        ? `Using repo-local stack mode (local-dev-build): ${stackContext.composeFilePath}`
+        : `Using installer-managed stack mode (release-image): ${stackContext.composeFilePath}`
+    );
 
     let existingDimension: number | null = null;
     if (!forceFreshEmbeddingSelection) {
@@ -396,7 +401,10 @@ export async function runSetupWizard(
     );
     if (!stackStarted.ok) {
       stackSpinner.fail("MemoryMesh stack failed to start");
-      return failWithMessage(resolved.ui, stackStarted.message);
+      return failWithMessage(
+        resolved.ui,
+        `${stackStarted.message} (mode=${stackMode}, compose=${stackContext.composeFilePath})`
+      );
     }
     stackSpinner.succeed("Stack started");
 

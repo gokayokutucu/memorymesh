@@ -93,4 +93,20 @@ describe("stack packaging", () => {
 
     expect(mode.mode).toBe("release-image");
   });
+
+  it("uses release-image mode by default when local build is not explicitly enabled", () => {
+    const fs: IFileSystem = {
+      exists: () => true,
+      mkdir: async () => {},
+      read: async () => "",
+      write: async () => {},
+    };
+
+    const mode = resolveStackMode(fs, {
+      cwd: "/tmp/workspace",
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(mode.mode).toBe("release-image");
+  });
 });

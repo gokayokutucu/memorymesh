@@ -208,6 +208,9 @@ describe("setup wizard", () => {
         `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} pull`
       )
     ).toBe(false);
+    expect(
+      ui.notes.some((note) => note.includes("Using repo-local stack mode (local-dev-build)"))
+    ).toBe(true);
     expect(ui.dirtyPromptCalls).toBe(0);
   });
 
@@ -234,6 +237,9 @@ describe("setup wizard", () => {
     });
 
     expect(code).toBe("completed");
+    expect(
+      ui.notes.some((note) => note.includes("Using installer-managed stack mode (release-image)"))
+    ).toBe(true);
     expect(ui.notes.some((note) => note.includes("MemoryMesh MCP configured"))).toBe(false);
     expect(
       ui.notes.some((note) => note.includes("Please fully close and reopen Claude Desktop"))
