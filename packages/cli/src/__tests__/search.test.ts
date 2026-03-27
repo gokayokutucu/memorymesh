@@ -224,7 +224,7 @@ describe("search command", () => {
 
   it("shows full untruncated source_path in detail line", async () => {
     const fullPath =
-      "/Users/gokay/Documents/Workspace/MemoryMesh/samples/document-import/nested/more/deep-notes.txt";
+      "/tmp/samples/document-import/nested/more/deep-notes.txt";
     const search = jest.fn().mockResolvedValue([
       {
         content: "Deep note",
@@ -290,7 +290,7 @@ describe("search command", () => {
     const lines = renderSearchResultLines(
       {
         sourceContext: "[notes.txt] docs/notes.txt (.txt, chunk 3/9)",
-        sourcePathLine: "Source path: /Users/gokay/docs/notes.txt",
+        sourcePathLine: "Source path: /tmp/docs/notes.txt",
         snippet: [
           "[Document Source]",
           "filename: notes.txt",
@@ -304,7 +304,7 @@ describe("search command", () => {
 
     expect(lines).toHaveLength(3);
     expect(lines[0]).toContain("1. [notes.txt] docs/notes.txt (.txt, chunk 3/9)");
-    expect(lines[1]).toContain("Source path: /Users/gokay/docs/notes.txt");
+    expect(lines[1]).toContain("Source path: /tmp/docs/notes.txt");
     expect(lines[2]).toContain("Alpha lantern memorymesh beacon");
     expect(lines[2]).not.toContain("[Document Source]");
   });

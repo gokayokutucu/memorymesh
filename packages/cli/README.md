@@ -292,25 +292,25 @@ This mode exists mainly for:
 ```bash
 # dry-run on a folder (quiet default)
 memorymesh import:gpt \
-  --path /Users/gokay/Downloads/gpt-extraction \
+  --path ~/Downloads/gpt-extraction \
   --project MemoryMesh \
   --dry-run
 
 # real import on a folder
 memorymesh import:gpt \
-  --path /Users/gokay/Downloads/gpt-extraction \
+  --path ~/Downloads/gpt-extraction \
   --project MemoryMesh
 
 # rust engine dry-run
 memorymesh import:gpt \
-  --path /Users/gokay/Downloads/gpt-extraction \
+  --path ~/Downloads/gpt-extraction \
   --project MemoryMesh \
   --dry-run \
   --engine rust
 
 # verbose dry-run with no pacing delay
 memorymesh import:gpt \
-  --path /Users/gokay/Downloads/gpt-extraction \
+  --path ~/Downloads/gpt-extraction \
   --project MemoryMesh \
   --dry-run \
   --verbose \
@@ -318,7 +318,7 @@ memorymesh import:gpt \
 
 # import only first 10 conversations
 memorymesh import:gpt \
-  --path /Users/gokay/Downloads/gpt-extraction \
+  --path ~/Downloads/gpt-extraction \
   --project MemoryMesh \
   --limit 10
 ```
