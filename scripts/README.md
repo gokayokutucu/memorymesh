@@ -134,3 +134,25 @@ git pull
 - Conventional commits → automatic version bump
 - npm trusted publishing (OIDC)
 - changelog generation
+
+---
+
+## Local Smoke Reset (Developer Helper)
+
+`scripts/local-smoke-reset.sh` is a local-only helper script for troubleshooting and quick smoke verification.
+It is not part of the release flow.
+
+Modes:
+
+```bash
+./scripts/local-smoke-reset.sh clean
+./scripts/local-smoke-reset.sh build
+./scripts/local-smoke-reset.sh pack-install
+./scripts/local-smoke-reset.sh full
+```
+
+Optional interactive smoke (manual):
+
+```bash
+MEMORYMESH_SMOKE_INTERACTIVE=1 ./scripts/local-smoke-reset.sh full
+```
