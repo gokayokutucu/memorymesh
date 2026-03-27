@@ -141,7 +141,10 @@ export async function inspectDirtySetupState(
   let mongoHasDocuments = false;
   let neo4jHasNodes = false;
 
-  qdrantHasCollections = await detectQdrantCollections(runner);
+  const hasManagedFootprint = homeDirExists || stackComposeExists;
+  if (hasManagedFootprint) {
+    qdrantHasCollections = await detectQdrantCollections(runner);
+  }
 
   if (stackComposeExists) {
     const stackContext = getManagedStackContext(homeDir);

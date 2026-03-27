@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 interface IImportState {
   lastStartedChatGptImportPath?: string;
+  lastStartedDocumentImportPath?: string;
 }
 
 function getImportStatePath(homeDir: string): string {
@@ -80,10 +81,58 @@ export async function persistLastStartedChatGptImportPath(
   homeDir: string,
   inputPath: string
 ): Promise<void> {
-  const statePath = getImportStatePath(homeDir);
-  await mkdir(join(homeDir, ".memorymesh"), { recursive: true });
+  const previous = await readImportStateOrEmpty(homeDir);
   const state: IImportState = {
+    ...previous,
     lastStartedChatGptImportPath: inputPath,
   };
+  await writeImportState(homeDir, state);
+}
+
+export async function readLastStartedDocumentImportPath(
+  homeDir: string
+): Promise<string | null> {
+  try {
+    const parsed = await readImportState(homeDir);
+    const path = parsed.lastStartedDocumentImportPath;
+    if (typeof path !== "string" || path.trim().length === 0) {
+      return null;
+    }
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+export async function persistLastStartedDocumentImportPath(
+  homeDir: string,
+  inputPath: string
+): Promise<void> {
+  const previous = await readImportStateOrEmpty(homeDir);
+  const state: IImportState = {
+    ...previous,
+    lastStartedDocumentImportPath: inputPath,
+  };
+  await writeImportState(homeDir, state);
+}
+
+async function readImportState(homeDir: string): Promise<IImportState> {
+  const statePath = getImportStatePath(homeDir);
+  const raw = await readFile(statePath, "utf-8");
+  const parsed = JSON.parse(raw) as IImportState;
+  return parsed;
+}
+
+async function readImportStateOrEmpty(homeDir: string): Promise<IImportState> {
+  try {
+    return await readImportState(homeDir);
+  } catch {
+    return {};
+  }
+}
+
+async function writeImportState(homeDir: string, state: IImportState): Promise<void> {
+  const statePath = getImportStatePath(homeDir);
+  await mkdir(join(homeDir, ".memorymesh"), { recursive: true });
   await writeFile(statePath, JSON.stringify(state, null, 2), "utf-8");
 }

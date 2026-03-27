@@ -187,7 +187,7 @@ export class ClackInstallerUi implements IInstallerUi {
         return "Flash (nomic-embed-text, 768) — Recommended (matches existing data)";
       }
       if (existing && existing !== 768) {
-        return "Flash (nomic-embed-text, 768)";
+        return "Flash (nomic-embed-text, 768) — Will require reset";
       }
       return "Flash (nomic-embed-text, 768)";
     }

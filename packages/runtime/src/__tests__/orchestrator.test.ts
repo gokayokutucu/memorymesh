@@ -75,6 +75,7 @@ describe("orchestrateSave", () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       undefined
     );
     expect(mockSaveDocument).not.toHaveBeenCalled();
@@ -90,6 +91,16 @@ describe("orchestrateSave", () => {
         title: "MM-012",
         ref_id: "MM-012",
         source_type: "document",
+        source_metadata: {
+          filename: "report.md",
+          source_path: "/tmp/report.md",
+          relative_path: "docs/report.md",
+          source_extension: "md",
+          chunk_index: 1,
+          chunk_total: 2,
+          project: "HumanTick",
+          ref_id: "MM-012",
+        },
       },
       new Array(768).fill(0.1)
     );
@@ -108,6 +119,10 @@ describe("orchestrateSave", () => {
         title: "MM-012",
         ref_id: "MM-012",
         source_type: "document",
+        source_metadata: expect.objectContaining({
+          filename: "report.md",
+          source_extension: "md",
+        }),
       })
     );
     expect(mockSaveNode).toHaveBeenCalledWith(
@@ -124,7 +139,17 @@ describe("orchestrateSave", () => {
       undefined,
       undefined,
       undefined,
-      undefined
+      undefined,
+      {
+        filename: "report.md",
+        source_path: "/tmp/report.md",
+        relative_path: "docs/report.md",
+        source_extension: "md",
+        chunk_index: 1,
+        chunk_total: 2,
+        project: "HumanTick",
+        ref_id: "MM-012",
+      }
     );
   });
 
@@ -340,6 +365,153 @@ describe("orchestrateSearch", () => {
 
     expect(mockGetPointsByIds).toHaveBeenCalledWith(["g1", "g2", "g3"]);
     expect(results).toHaveLength(4);
+  });
+
+  it("enforces filename filter after graph expansion and excludes non-matching records", async () => {
+    mockSearchPoints.mockResolvedValue([
+      {
+        id: "q1",
+        content: "vector notes",
+        project: "HumanTick",
+        memory_type: "context",
+        semantic_score: 0.95,
+        similarity_score: 0.95,
+        created_at: "2026-03-10T10:00:00.000Z",
+        source_type: "document",
+        source_metadata: {
+          filename: "notes.txt",
+          relative_path: "notes.txt",
+          source_extension: "txt",
+        },
+      },
+    ]);
+    mockQueryByTags.mockResolvedValue(["g1"]);
+    mockQueryByDateRange.mockResolvedValue([]);
+    mockQueryRelated.mockResolvedValue([]);
+    mockGetPointsByIds.mockResolvedValue([
+      {
+        id: "g1",
+        content: "deep file via graph expansion",
+        project: "HumanTick",
+        memory_type: "context",
+        semantic_score: 0,
+        similarity_score: 0,
+        created_at: "2026-03-09T10:00:00.000Z",
+        source_type: "document",
+        source_metadata: {
+          filename: "deep-notes.txt",
+          relative_path: "nested/deep-notes.txt",
+          source_extension: "txt",
+        },
+      },
+    ]);
+
+    const results = await orchestrateSearch(new Array(768).fill(0.1), {
+      query: "twilight",
+      project: "HumanTick",
+      filename: "notes.txt",
+      source_type: "document",
+      limit: 5,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].source_metadata?.filename).toBe("notes.txt");
+  });
+
+  it("enforces combined metadata filters strictly after merge and dedupe", async () => {
+    mockSearchPoints.mockResolvedValue([
+      {
+        id: "q1",
+        content: "guide chunk",
+        project: "DocFixtureE2E",
+        memory_type: "context",
+        semantic_score: 0.91,
+        similarity_score: 0.91,
+        created_at: "2026-03-10T10:00:00.000Z",
+        source_type: "document",
+        source_metadata: {
+          filename: "guide.md",
+          relative_path: "guide.md",
+          source_extension: "md",
+        },
+      },
+    ]);
+    mockQueryByTags.mockResolvedValue(["g1"]);
+    mockQueryByDateRange.mockResolvedValue([]);
+    mockQueryRelated.mockResolvedValue([]);
+    mockGetPointsByIds.mockResolvedValue([
+      {
+        id: "g1",
+        content: "csv row from expansion",
+        project: "DocFixtureE2E",
+        memory_type: "context",
+        semantic_score: 0,
+        similarity_score: 0,
+        created_at: "2026-03-09T10:00:00.000Z",
+        source_type: "document",
+        source_metadata: {
+          filename: "records.csv",
+          relative_path: "records.csv",
+          source_extension: "csv",
+        },
+      },
+    ]);
+
+    const results = await orchestrateSearch(new Array(768).fill(0.1), {
+      query: "fixture",
+      project: "DocFixtureE2E",
+      filename: "guide.md",
+      relative_path: "guide.md",
+      source_extension: "md",
+      source_type: "document",
+      limit: 5,
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].source_metadata).toEqual(
+      expect.objectContaining({
+        filename: "guide.md",
+        relative_path: "guide.md",
+        source_extension: "md",
+      })
+    );
+  });
+
+  it("keeps current behavior when metadata filters are absent", async () => {
+    mockSearchPoints.mockResolvedValue([
+      {
+        id: "q1",
+        content: "base",
+        project: "HumanTick",
+        memory_type: "context",
+        semantic_score: 0.8,
+        similarity_score: 0.8,
+        created_at: "2026-03-10T10:00:00.000Z",
+      },
+    ]);
+    mockQueryByTags.mockResolvedValue(["g1"]);
+    mockQueryByDateRange.mockResolvedValue([]);
+    mockQueryRelated.mockResolvedValue([]);
+    mockGetPointsByIds.mockResolvedValue([
+      {
+        id: "g1",
+        content: "expanded",
+        project: "HumanTick",
+        memory_type: "context",
+        semantic_score: 0,
+        similarity_score: 0,
+        created_at: "2026-03-09T10:00:00.000Z",
+      },
+    ]);
+
+    const results = await orchestrateSearch(new Array(768).fill(0.1), {
+      query: "architecture",
+      project: "HumanTick",
+      tags: ["arch"],
+      limit: 5,
+    });
+
+    expect(results.map((item) => item.id)).toEqual(expect.arrayContaining(["q1", "g1"]));
   });
 
   it("uses hybrid relevance ranking in default mode", async () => {

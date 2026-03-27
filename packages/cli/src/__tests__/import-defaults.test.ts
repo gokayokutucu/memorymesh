@@ -4,7 +4,9 @@ import { join } from "node:path";
 import {
   detectLatestChatGptExportPath,
   expandHomePath,
+  persistLastStartedDocumentImportPath,
   persistLastStartedChatGptImportPath,
+  readLastStartedDocumentImportPath,
   readLastStartedChatGptImportPath,
 } from "../commands/import-defaults";
 
@@ -50,5 +52,27 @@ describe("import defaults", () => {
     await persistLastStartedChatGptImportPath(homeDir, path);
     const loaded = await readLastStartedChatGptImportPath(homeDir);
     expect(loaded).toBe(path);
+  });
+
+  it("persists and reads last started document import path", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "mm-doc-import-defaults-state-"));
+    const path = join(homeDir, "Documents", "knowledge");
+    await persistLastStartedDocumentImportPath(homeDir, path);
+    const loaded = await readLastStartedDocumentImportPath(homeDir);
+    expect(loaded).toBe(path);
+  });
+
+  it("keeps chatgpt and document import paths together in same state file", async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), "mm-import-defaults-shared-"));
+    const chatPath = join(homeDir, "Downloads", "chatgpt.zip");
+    const docPath = join(homeDir, "Documents", "docs");
+    await persistLastStartedChatGptImportPath(homeDir, chatPath);
+    await persistLastStartedDocumentImportPath(homeDir, docPath);
+
+    const loadedChat = await readLastStartedChatGptImportPath(homeDir);
+    const loadedDoc = await readLastStartedDocumentImportPath(homeDir);
+
+    expect(loadedChat).toBe(chatPath);
+    expect(loadedDoc).toBe(docPath);
   });
 });

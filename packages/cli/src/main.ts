@@ -4,6 +4,7 @@ import { isMemoryMeshInstalled } from "./installer/first-run";
 import { runSetupWizard } from "./installer/setup-wizard";
 import { resolveUserHomeDir } from "./system/runtime-home";
 import { style } from "./terminal-style";
+import { renderSearchResultLines } from "./commands/search";
 
 function printMainHelp(): void {
   console.log(style.heading("MemoryMesh CLI"));
@@ -11,6 +12,7 @@ function printMainHelp(): void {
   console.log("  memorymesh                     # setup + interactive menu");
   console.log("  memorymesh import:gpt [args]   # direct command mode");
   console.log("  memorymesh import:documents    # direct document import mode");
+  console.log("  memorymesh search [args]       # direct search mode");
   console.log("  memorymesh doctor              # service health report");
   console.log("  memorymesh doctor --fix        # run diagnostics and safe repairs");
   console.log("  memorymesh start               # start managed stack");
@@ -59,6 +61,24 @@ export async function runMain(argv: string[]): Promise<number> {
   if (command === "import:documents") {
     const { runImportDocumentsCommand } = await import("./commands/import-documents");
     return runImportDocumentsCommand(rest);
+  }
+
+  if (command === "search") {
+    const { runSearchCommand } = await import("./commands/search");
+    const result = await runSearchCommand(rest);
+    if (!result.ok) {
+      console.error(style.error(result.message));
+      return 1;
+    }
+    console.log(result.message);
+    for (let i = 0; i < result.results.length; i += 1) {
+      const row = result.results[i];
+      const lines = renderSearchResultLines(row, i + 1, { snippetMaxChars: 120 });
+      for (const line of lines) {
+        console.log(line);
+      }
+    }
+    return 0;
   }
 
   if (command === "doctor") {

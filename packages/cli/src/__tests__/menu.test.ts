@@ -16,6 +16,30 @@ jest.mock("../commands/mcp", () => ({
 
 jest.mock("../commands/search", () => ({
   runSearchCommand: jest.fn(),
+  renderSearchResultLines: jest.fn(
+    (
+      row: {
+        snippet: string;
+        source?: string;
+        sourceContext?: string;
+        sourcePathLine?: string;
+      },
+      index: number
+    ) => {
+      if (row.sourceContext) {
+        const head = `${index}. ${row.sourceContext}${
+          row.source ? ` | source=${row.source}` : ""
+        }`;
+        const lines = [head];
+        if (row.sourcePathLine) {
+          lines.push(`   ${row.sourcePathLine}`);
+        }
+        lines.push(`   ${row.snippet}`);
+        return lines;
+      }
+      return [`${index}. ${row.snippet}${row.source ? ` | source=${row.source}` : ""}`];
+    }
+  ),
 }));
 
 jest.mock("../installer/first-run", () => ({
@@ -68,6 +92,9 @@ import { downMemoryMeshStack, startMemoryMeshStack } from "../system/docker";
 import { resolveInstallerManagedStack } from "../installer/stack-packaging";
 import { resolveAuthoritativeEmbeddingConfig } from "../installer/embedding-authority";
 import { runEmbeddingMismatchFlow } from "../installer/embedding-mismatch-flow";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 class FakeUi implements IRuntimeMenuUi {
   notes: string[] = [];
@@ -202,7 +229,9 @@ const mockedRunEmbeddingMismatchFlow =
 
 describe("runtime menu", () => {
   const mockedReadLastImportPath = jest.fn<Promise<string | null>, [string]>();
+  const mockedReadLastDocumentImportPath = jest.fn<Promise<string | null>, [string]>();
   const mockedPersistLastImportPath = jest.fn<Promise<void>, [string, string]>();
+  const mockedPersistLastDocumentImportPath = jest.fn<Promise<void>, [string, string]>();
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -270,7 +299,9 @@ describe("runtime menu", () => {
     });
     mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "no_mismatch" });
     mockedReadLastImportPath.mockResolvedValue(null);
+    mockedReadLastDocumentImportPath.mockResolvedValue(null);
     mockedPersistLastImportPath.mockResolvedValue();
+    mockedPersistLastDocumentImportPath.mockResolvedValue();
   });
 
   it("gracefully exits", async () => {
@@ -532,7 +563,12 @@ describe("runtime menu", () => {
     mockedRunSearchCommand.mockResolvedValue({
       ok: true,
       message: "Search completed.",
-      results: [{ snippet: "Memory snippet", source: "chatgpt" }],
+      results: [{
+        snippet: "Memory snippet",
+        source: "chatgpt",
+        sourceContext: "[notes.txt] docs/notes.txt (.txt, chunk 1/3)",
+        sourcePathLine: "Source path: /tmp/home/docs/notes.txt",
+      }],
     });
 
     await runRuntimeMenu({ ui, runner: new NoopRunner() });
@@ -546,6 +582,9 @@ describe("runtime menu", () => {
       "Search query (Ctrl+C to return to menu)",
     ]);
     expect(ui.notes.some((note) => note.includes("source=chatgpt"))).toBe(true);
+    expect(
+      ui.notes.some((note) => note.includes("Source path: /tmp/home/docs/notes.txt"))
+    ).toBe(true);
   });
 
   it("runs document import flow from runtime menu", async () => {
@@ -559,6 +598,13 @@ describe("runtime menu", () => {
       ui,
       runner: new NoopRunner(),
       homeDir: "/tmp/home",
+      readLastDocumentImportPath: mockedReadLastDocumentImportPath,
+      fs: {
+        exists: () => true,
+        mkdir: async () => undefined,
+        read: async () => "",
+        write: async () => undefined,
+      },
     });
 
     expect(mockedRunImportDocumentsCommand).toHaveBeenCalledWith(
@@ -569,9 +615,121 @@ describe("runtime menu", () => {
         "MemoryMesh",
         "--import-policy",
         "skip_existing",
-      ]
+      ],
+      {
+        onImportStarted: expect.any(Function),
+      }
     );
     expect(ui.notes.some((note) => note.includes("Document import completed."))).toBe(true);
+  });
+
+  it("prefills document import path from previously stored path", async () => {
+    const ui = new FakeUi(
+      ["import_documents", "exit"],
+      ["", "", ""]
+    );
+    mockedReadLastDocumentImportPath.mockResolvedValue(
+      "/tmp/home/Documents/last-document-import"
+    );
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+      readLastDocumentImportPath: mockedReadLastDocumentImportPath,
+      fs: {
+        exists: () => true,
+        mkdir: async () => undefined,
+        read: async () => "",
+        write: async () => undefined,
+      },
+    });
+
+    expect(ui.promptMessages[0]).toBe("Path to file/folder to import (Tab to accept)");
+    expect(ui.promptPlaceholders[0]).toBe("/tmp/home/Documents/last-document-import");
+    expect(ui.promptTabCycleValues[0]).toEqual([
+      "/tmp/home/Documents/last-document-import",
+    ]);
+    expect(mockedRunImportDocumentsCommand).toHaveBeenCalledWith([
+      "--path",
+      "/tmp/home/Documents/last-document-import",
+      "--project",
+      "MemoryMesh",
+      "--import-policy",
+      "skip_existing",
+    ], {
+      onImportStarted: expect.any(Function),
+    });
+  });
+
+  it("keeps remembered document path in prompt even if filesystem check would fail", async () => {
+    const ui = new FakeUi(
+      ["import_documents", "exit"],
+      ["", "", ""]
+    );
+    mockedReadLastDocumentImportPath.mockResolvedValue(
+      "/tmp/home/Documents/missing-last-docs"
+    );
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+      readLastDocumentImportPath: mockedReadLastDocumentImportPath,
+      fs: {
+        exists: () => false,
+        mkdir: async () => undefined,
+        read: async () => "",
+        write: async () => undefined,
+      },
+    });
+
+    expect(ui.promptMessages[0]).toBe("Path to file/folder to import (Tab to accept)");
+    expect(ui.promptPlaceholders[0]).toBe("/tmp/home/Documents/missing-last-docs");
+    expect(ui.promptTabCycleValues[0]).toEqual([
+      "/tmp/home/Documents/missing-last-docs",
+    ]);
+    expect(mockedRunImportDocumentsCommand).toHaveBeenCalledWith([
+      "--path",
+      "/tmp/home/Documents/missing-last-docs",
+      "--project",
+      "MemoryMesh",
+      "--import-policy",
+      "skip_existing",
+    ], {
+      onImportStarted: expect.any(Function),
+    });
+  });
+
+  it("persists document import path when import start milestone is emitted", async () => {
+    const ui = new FakeUi(["import_documents", "exit"], [
+      "~/Documents/new-docs",
+      "",
+      "",
+    ]);
+    mockedRunImportDocumentsCommand.mockImplementation(async (_argv, deps) => {
+      await deps?.onImportStarted?.("/tmp/home/Documents/new-docs");
+      return 130;
+    });
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+      readLastDocumentImportPath: mockedReadLastDocumentImportPath,
+      persistLastDocumentImportPath: mockedPersistLastDocumentImportPath,
+      fs: {
+        exists: () => true,
+        mkdir: async () => undefined,
+        read: async () => "",
+        write: async () => undefined,
+      },
+    });
+
+    expect(mockedPersistLastDocumentImportPath).toHaveBeenCalledWith(
+      "/tmp/home",
+      "/tmp/home/Documents/new-docs"
+    );
   });
 
   it("keeps search mode in loop after no-result response", async () => {
@@ -736,6 +894,28 @@ describe("runtime menu", () => {
       expect.anything()
     );
     expect(mockedWriteInstallerRuntimeEnv).toHaveBeenCalled();
+  });
+
+  it("clears checkpoint directory during settings-approved embedding reset", async () => {
+    const ui = new FakeUi(["settings", "exit"], [], ["medium"]);
+    const tempHome = mkdtempSync(join(tmpdir(), "memorymesh-menu-reset-"));
+    const checkpointDir = join(tempHome, ".memorymesh", "checkpoints");
+    mkdirSync(checkpointDir, { recursive: true });
+    writeFileSync(join(checkpointDir, "document-import-real-stale.json"), "{}");
+    mockedDetectQdrantCollectionDimension.mockResolvedValue(768);
+    mockedRunEmbeddingMismatchFlow.mockImplementation(async ({ onApprovedReset }) => {
+      await onApprovedReset();
+      return { status: "approved" };
+    });
+
+    try {
+      await runRuntimeMenu({ ui, runner: new NoopRunner(), homeDir: tempHome });
+      expect(mockedDownMemoryMeshStack).toHaveBeenCalledTimes(1);
+      expect(mockedStartMemoryMeshStack).toHaveBeenCalledTimes(1);
+      expect(existsSync(checkpointDir)).toBe(false);
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("keeps config unchanged on settings reject path", async () => {

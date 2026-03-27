@@ -166,6 +166,12 @@ export async function importFromPath(
       engine,
       import_policy: options.importPolicy ?? "skip_existing",
       execution_mode: executionMode,
+      import_kind: "gpt",
+      embedding_mode: options.runtimeEnv?.MEMORYMESH_EMBEDDING_MODE,
+      embedding_model: options.runtimeEnv?.EMBEDDING_MODEL,
+      embedding_dimension: parseEmbeddingDimension(
+        options.runtimeEnv?.MEMORYMESH_EMBEDDING_DIMENSION
+      ),
     },
     {
       enabled: options.checkpointEnabled ?? true,
@@ -905,6 +911,19 @@ function buildScanSummaryTable(report: IScanReport): string[] {
   }
   lines.push(top);
   return lines;
+}
+
+function parseEmbeddingDimension(
+  value: string | undefined
+): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return undefined;
+  }
+  return parsed;
 }
 
 function progressBar(current: number, total: number, width = 24): string {

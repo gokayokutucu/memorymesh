@@ -13,6 +13,17 @@ export type SourceType =
   | "summary"
   | "imported_conversation";
 
+export interface ISourceMetadata {
+  filename?: string;
+  source_path?: string;
+  relative_path?: string;
+  source_extension?: string;
+  chunk_index?: number;
+  chunk_total?: number;
+  project?: string;
+  ref_id?: string;
+}
+
 export interface ISaveMemoryInput {
   content: string;
   project: string;
@@ -29,6 +40,7 @@ export interface ISaveMemoryInput {
   title?: string;
   ref_id?: string;
   source_type?: SourceType;
+  source_metadata?: ISourceMetadata;
 }
 
 export interface ISaveMemoryResult {
@@ -56,6 +68,10 @@ export interface ISearchMemoryInput {
   ref_id?: string;
   title?: string;
   source_type?: string;
+  filename?: string;
+  source_path?: string;
+  relative_path?: string;
+  source_extension?: string;
   sort_by?: "relevance" | "recency" | "oldest";
   before?: string;
   after?: string;
@@ -83,6 +99,7 @@ export interface ISearchResult {
   title?: string;
   ref_id?: string;
   source_type?: SourceType;
+  source_metadata?: ISourceMetadata;
 }
 
 export interface IProjectSummary {

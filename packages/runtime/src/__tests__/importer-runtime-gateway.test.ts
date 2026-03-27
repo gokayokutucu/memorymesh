@@ -1,11 +1,13 @@
 const mockSaveMemoryForImport = jest.fn();
 const mockGetMemoryStatus = jest.fn();
 const mockGetMemoryByRef = jest.fn();
+const mockDeleteMemoriesByIds = jest.fn();
 
 jest.mock("../memory", () => ({
   saveMemoryForImport: (...args: unknown[]) => mockSaveMemoryForImport(...args),
   getMemoryStatus: (...args: unknown[]) => mockGetMemoryStatus(...args),
   getMemoryByRef: (...args: unknown[]) => mockGetMemoryByRef(...args),
+  deleteMemoriesByIds: (...args: unknown[]) => mockDeleteMemoriesByIds(...args),
 }));
 
 describe("RuntimeImporterGateway", () => {
@@ -90,5 +92,14 @@ describe("RuntimeImporterGateway", () => {
       name: "ImportInterruptedError",
       code: "import_interrupted",
     });
+  });
+
+  it("deletes memories by ids for overwrite support", async () => {
+    const { RuntimeImporterGateway } = await import("../importer-runtime-gateway");
+    const gateway = new RuntimeImporterGateway();
+
+    await gateway.deleteMemoriesByIds(["a", "b"]);
+
+    expect(mockDeleteMemoriesByIds).toHaveBeenCalledWith(["a", "b"]);
   });
 });

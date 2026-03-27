@@ -36,7 +36,19 @@ describe("document-store", () => {
   it("saveDocument writes/upserts a document", async () => {
     const { saveDocument } = await import("../document-store");
 
-    await saveDocument("id-1", "full text", { project: "HumanTick" });
+    await saveDocument("id-1", "full text", {
+      project: "HumanTick",
+      source_format: "document_import_v1",
+      source_type: "document",
+      source_metadata: {
+        filename: "notes.md",
+        source_path: "/tmp/notes.md",
+        relative_path: "docs/notes.md",
+        source_extension: "md",
+        chunk_index: 1,
+        chunk_total: 2,
+      },
+    });
 
     expect(mockCreateIndex).toHaveBeenCalledWith({ _id: 1 });
     expect(mockUpdateOne).toHaveBeenCalledWith(
@@ -44,7 +56,15 @@ describe("document-store", () => {
       {
         $set: expect.objectContaining({
           content: "full text",
-          metadata: { project: "HumanTick" },
+          metadata: expect.objectContaining({
+            project: "HumanTick",
+            source_format: "document_import_v1",
+            source_type: "document",
+            source_metadata: expect.objectContaining({
+              filename: "notes.md",
+              source_extension: "md",
+            }),
+          }),
         }),
       },
       { upsert: true }

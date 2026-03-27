@@ -165,3 +165,32 @@ export async function getDocuments(ids: string[]): Promise<Map<string, string>> 
     return results;
   }
 }
+
+export async function deleteDocuments(ids: string[]): Promise<boolean> {
+  if (ids.length === 0) {
+    return true;
+  }
+
+  const docCollection = await getCollection();
+  if (!docCollection) {
+    return false;
+  }
+
+  try {
+    await executeWithRetry(
+      async () => {
+        await docCollection.deleteMany({ _id: { $in: ids } });
+      },
+      {
+        store: "mongo",
+        operation: "deleteMany",
+        isTransient: isTransientMongoError,
+        transientFailureCode: "mongo_transient_failure",
+      }
+    );
+    return true;
+  } catch (error) {
+    warnOnce(error);
+    return false;
+  }
+}

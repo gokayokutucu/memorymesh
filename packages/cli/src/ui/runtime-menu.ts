@@ -311,7 +311,7 @@ export class ClackRuntimeMenuUi implements IRuntimeMenuUi {
         { value: "import_chatgpt", label: "Import ChatGPT archive" },
         { value: "import_documents", label: "Import documents" },
         { value: "search_memories", label: "Search memories" },
-        { value: "start_mcp_server", label: "Start MCP server" },
+        { value: "start_mcp_server", label: "Start MCP bridge" },
         { value: "settings", label: "Settings" },
         { value: "doctor", label: "Doctor" },
         { value: "exit", label: "Exit" },

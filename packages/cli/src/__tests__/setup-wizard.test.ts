@@ -103,10 +103,11 @@ class FakeUi implements IInstallerUi {
   dirtyPromptCalls = 0;
   confirmCalls = 0;
   approvalCalls = 0;
+  embeddingPromptExistingDimension: number | null = null;
 
   constructor(
     private readonly shouldConfigureClaude = true,
-    private readonly selectedEmbeddingModel: "nomic-embed-text" | "mxbai-embed-large" = "nomic-embed-text",
+    private readonly selectedEmbeddingModel: "nomic-embed-text" | "mxbai-embed-large" | null = "nomic-embed-text",
     private readonly dirtyStateAction: "clean_install" | "reuse_existing" | "exit" = "reuse_existing",
     private readonly confirmResponse = true,
     private readonly approvalResponse: ApprovalResult = { status: "approved" }
@@ -135,8 +136,12 @@ class FakeUi implements IInstallerUi {
     return this.dirtyStateAction;
   }
   async selectEmbeddingModel(
-    _input?: { existingDimension: number | null }
+    input?: { existingDimension: number | null }
   ): Promise<"nomic-embed-text" | "mxbai-embed-large" | null> {
+    this.embeddingPromptExistingDimension = input?.existingDimension ?? null;
+    if (!this.selectedEmbeddingModel) {
+      return null;
+    }
     return this.selectedEmbeddingModel;
   }
   async confirmClaudeIntegration(): Promise<boolean> {
@@ -344,6 +349,47 @@ describe("setup wizard", () => {
     ).toBe(true);
   });
 
+  it("falls back to persisted embedding dimension for setup labels when qdrant dimension is unavailable", async () => {
+    const fs: IFileSystem = {
+      exists: (path: string) =>
+        path.endsWith("apps/server/Dockerfile") ||
+        path.endsWith("package.json") ||
+        path.endsWith(".memorymesh/config.json"),
+      mkdir: async () => {},
+      read: async (path: string) => {
+        if (path.endsWith(".memorymesh/config.json")) {
+          return JSON.stringify({
+            installState: "installed",
+            embeddingMode: "flash",
+            embeddingModel: "nomic-embed-text",
+            embeddingDimension: 768,
+            installedAt: new Date().toISOString(),
+            stackProjectDir: STACK_DIR,
+            composeFilePath: STACK_PATH,
+          });
+        }
+        return "{}";
+      },
+      write: async () => {},
+    };
+    const ui = new FakeUi(false);
+    const runner = new FakeRunner(createBaseRunnerMap());
+
+    const code = await runSetupWizard({
+      fs,
+      ui,
+      runner,
+      spinnerFactory: new FakeSpinnerFactory(),
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
+      homeDir: "/tmp/home",
+      platform: "darwin",
+    });
+
+    expect(code).toBe("completed");
+    expect(ui.embeddingPromptExistingDimension).toBe(768);
+  });
+
   it("keeps installer idempotent when MemoryMesh MCP entry already exists", async () => {
     const writes: string[] = [];
     const fs: IFileSystem = {
@@ -465,6 +511,57 @@ describe("setup wizard", () => {
       )
     ).toBe(true);
     expect(removedPaths).toContain("/tmp/home/.memorymesh");
+    expect(removedPaths).toContain("/tmp/home/.memorymesh/checkpoints");
+    expect(ui.embeddingPromptExistingDimension).toBeNull();
+    expect(
+      runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
+    ).toBe(false);
+  });
+
+  it("rolls back transient managed state when clean-install run is cancelled before completion", async () => {
+    const fs: IFileSystem = {
+      exists: (path: string) =>
+        path.endsWith("apps/server/Dockerfile") ||
+        path.endsWith("package.json") ||
+        path.endsWith(".memorymesh") ||
+        path.endsWith("stack/docker-compose.yml"),
+      mkdir: async () => {},
+      read: async () => "{}",
+      write: async () => {},
+    };
+    const runner = new FakeRunner(createBaseRunnerMap());
+    const ui = new FakeUi(false, null, "clean_install");
+    const removedPaths: string[] = [];
+
+    const code = await runSetupWizard({
+      fs,
+      ui,
+      runner,
+      spinnerFactory: new FakeSpinnerFactory(),
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
+      homeDir: "/tmp/home",
+      platform: "darwin",
+      removePath: async (path: string) => {
+        removedPaths.push(path);
+      },
+    });
+
+    expect(code).toBe("cancelled");
+    expect(
+      runner.calls.filter(
+        (call) =>
+          call
+          === `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`
+      ).length
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      removedPaths.filter((path) => path === "/tmp/home/.memorymesh").length
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      removedPaths.filter((path) => path === "/tmp/home/.memorymesh/checkpoints").length
+    ).toBeGreaterThanOrEqual(2);
+    expect(ui.embeddingPromptExistingDimension).toBeNull();
   });
 
   it("prompts for dirty state and supports reuse existing data", async () => {
@@ -499,6 +596,53 @@ describe("setup wizard", () => {
         `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`
       )
     ).toBe(false);
+  });
+
+  it("reuses existing-data branch and still passes detected existing dimension", async () => {
+    const fs: IFileSystem = {
+      exists: (path: string) =>
+        path.endsWith("apps/server/Dockerfile") ||
+        path.endsWith("package.json") ||
+        path.endsWith(".memorymesh") ||
+        path.endsWith("stack/docker-compose.yml"),
+      mkdir: async () => {},
+      read: async () => "{}",
+      write: async () => {},
+    };
+    const map = createBaseRunnerMap();
+    map["curl -fsS http://localhost:6333/collections/memories"] = {
+      code: 0,
+      stdout: JSON.stringify({
+        result: {
+          config: {
+            params: {
+              vectors: {
+                size: 1024,
+              },
+            },
+          },
+        },
+      }),
+    };
+    const runner = new FakeRunner(map);
+    const ui = new FakeUi(false, "nomic-embed-text", "reuse_existing");
+
+    const code = await runSetupWizard({
+      fs,
+      ui,
+      runner,
+      spinnerFactory: new FakeSpinnerFactory(),
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
+      homeDir: "/tmp/home",
+      platform: "darwin",
+    });
+
+    expect(code).toBe("completed");
+    expect(ui.embeddingPromptExistingDimension).toBe(1024);
+    expect(
+      runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
+    ).toBe(true);
   });
 
   it("exits setup when dirty state prompt selects exit", async () => {

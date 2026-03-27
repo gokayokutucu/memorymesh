@@ -155,5 +155,26 @@ All implementation decisions MUST align with the PRD.
 If a task requires deviating from the PRD, stop and ask before proceeding.
 
 Phase scope for this repo:
-- **Faz 1 (current):** Local MCP server, stdio transport, Qdrant + Ollama via Docker
-- **Faz 2 (future):** Remote MCP server, HTTP transport, Cloudflare Tunnel, Claude.ai web connector
+- **Phase 1 (current):** Local MCP server, stdio transport, Qdrant + Ollama via Docker
+- **Phase 2 (future):** Remote MCP server, HTTP transport, Cloudflare Tunnel, Claude.ai web connector
+
+---
+
+## 10) UX Test Contract Protection
+
+- When a failing or outdated unit/integration test protects a user-visible UX contract, do NOT silently change the test expectation.
+- First report:
+  1. which test(s) would need to change
+  2. why the implementation and test disagree
+  3. whether product behavior or test expectation should be treated as the source of truth
+- Wait for approval before changing those tests.
+- Treat these as UX contracts unless explicitly approved otherwise:
+  - setup prompt labels
+  - setup option labels
+  - model selection labels
+  - warning/help text
+  - progress text
+  - remembered-path behavior
+  - search result rendering
+  - user-visible summaries and status lines
+- Prefer restoring previously working user-visible behavior when regression is detected.

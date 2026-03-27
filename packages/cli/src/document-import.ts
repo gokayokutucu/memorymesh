@@ -8,6 +8,7 @@ import { basename, extname, isAbsolute, join, relative, resolve } from "node:pat
 import {
   CancellationToken,
   IImportPolicy,
+  ISourceMetadata,
   ImportInterruptedError,
 } from "@memorymesh/core";
 import {
@@ -18,6 +19,12 @@ import {
 import { getMemoryMeshConfigPath } from "./installer/first-run";
 import { ImportAuditLog } from "./import-audit-log";
 import { ImportCheckpoint } from "./import-checkpoint";
+import {
+  IRustDocumentEngineOutput,
+  IRustDocumentFileResult,
+  runRustDocumentImporterEngine,
+} from "./rust-engine";
+import { colorizeProgressLine } from "./terminal-style";
 
 const SUPPORTED_EXTENSIONS = new Set([".csv", ".json", ".jsonl", ".ndjson", ".md", ".txt"]);
 const DEFAULT_LIMITS: IDocumentImportLimits = {
@@ -27,6 +34,8 @@ const DEFAULT_LIMITS: IDocumentImportLimits = {
   chunk_size: 1200,
   chunk_overlap: 150,
 };
+const PROGRESS_LINE_COUNT = 3;
+const HEARTBEAT_INTERVAL_MS = 10_000;
 
 export interface IDocumentImportLimits {
   max_file_size_mb: number;
@@ -67,6 +76,7 @@ interface IDiscoveredFile {
   relativePath: string;
   extension: string;
   sizeBytes: number;
+  chunks: IDocumentChunk[];
 }
 
 interface IDocumentChunk {
@@ -84,10 +94,33 @@ interface IRawConfig {
   documentImportLimits?: Partial<IDocumentImportLimits>;
 }
 
+interface IDocumentImportDeps {
+  parseWithRust: (
+    inputPath: string,
+    limits: IDocumentImportLimits,
+    env?: NodeJS.ProcessEnv
+  ) => Promise<IRustDocumentEngineOutput>;
+}
+
+interface IDocumentFilePlan {
+  file: IDiscoveredFile;
+  fileIndex: number;
+  checkpointKey: string;
+  processedCount: number;
+  activeChunks: IDocumentChunk[];
+}
+
 export async function importDocumentsFromPath(
   inputPath: string,
-  options: IDocumentImportOptions
+  options: IDocumentImportOptions,
+  deps: Partial<IDocumentImportDeps> = {}
 ): Promise<IDocumentImportSummary> {
+  const resolvedDeps: IDocumentImportDeps = {
+    parseWithRust:
+      deps.parseWithRust
+      ?? ((inputPath, limits, env) =>
+        runRustDocumentImporterEngine(inputPath, limits, undefined, env)),
+  };
   const absoluteInput = resolve(inputPath);
   const executionMode = options.dryRun ? "dry_run" : "real";
   const importPolicy = options.importPolicy ?? "skip_existing";
@@ -100,6 +133,12 @@ export async function importDocumentsFromPath(
       engine: "ts",
       import_policy: importPolicy,
       execution_mode: executionMode,
+      import_kind: "document",
+      embedding_mode: options.runtimeEnv?.MEMORYMESH_EMBEDDING_MODE,
+      embedding_model: options.runtimeEnv?.EMBEDDING_MODEL,
+      embedding_dimension: parseEmbeddingDimension(
+        options.runtimeEnv?.MEMORYMESH_EMBEDDING_DIMENSION
+      ),
     },
     {
       enabled: options.checkpointEnabled ?? true,
@@ -131,12 +170,17 @@ export async function importDocumentsFromPath(
     });
   }
 
-  const discovered = await discoverSupportedFiles(absoluteInput);
+  const parsedOutput = await parseDocumentInputWithRustPreferred(
+    absoluteInput,
+    limits,
+    options.runtimeEnv,
+    resolvedDeps.parseWithRust
+  );
   const summary: IDocumentImportSummary = {
     inputPath: absoluteInput,
-    discoveredFiles: discovered.totalFiles,
-    supportedFiles: discovered.supported.length,
-    skippedFiles: discovered.totalFiles - discovered.supported.length,
+    discoveredFiles: parsedOutput.scan_summary.discovered_files,
+    supportedFiles: parsedOutput.scan_summary.supported_files,
+    skippedFiles: parsedOutput.scan_summary.skipped_files,
     importedChunks: 0,
     skippedChunks: 0,
     skipReasons: {},
@@ -154,7 +198,11 @@ export async function importDocumentsFromPath(
       return;
     }
     importStartedNotified = true;
-    await options.onImportStarted?.();
+    try {
+      await options.onImportStarted?.();
+    } catch {
+      // Persisting import-start metadata must not block import execution.
+    }
   };
 
   const onSignal = (): void => {
@@ -162,152 +210,305 @@ export async function importDocumentsFromPath(
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
+  let heartbeatTimer: NodeJS.Timeout | undefined;
+  const progressState = {
+    startedAtMs: Date.now(),
+    filesTotal: 0,
+    filesCompleted: 0,
+    chunksTotal: 0,
+    chunksCompleted: 0,
+    currentFileIndex: 0,
+    currentFileLabel: "",
+    currentFileChunksTotal: 0,
+    currentFileChunksProcessed: 0,
+    currentChunkDisplayIndex: 0,
+    currentChunkDisplayTotal: 0,
+    currentStage: "completed",
+    liveSaved: 0,
+    liveSkipped: 0,
+    liveResumeSkipped: 0,
+    lastVisibleUpdateAtMs: Date.now(),
+    lastHeartbeatAtMs: 0,
+    lastRenderedSnapshot: "",
+    rendered: false,
+  };
 
-  try {
-    if (!options.dryRun) {
-      await withRuntimeEnv(options.runtimeEnv, async () => {
-        await ensureEmbeddingModelAvailable();
-      });
+  const renderProgress = (): void => {
+    if (progressState.filesTotal <= 0) {
+      return;
+    }
+    const overallLine =
+      `[overall ] [${progressBar(progressState.chunksCompleted, Math.max(progressState.chunksTotal, 1))}] ` +
+      `completed files ${progressState.filesCompleted}/${progressState.filesTotal} | ` +
+      `chunks ${progressState.chunksCompleted}/${progressState.chunksTotal} | ` +
+      `saved ${progressState.liveSaved} | skipped ${progressState.liveSkipped} | ` +
+      `resume-skipped ${progressState.liveResumeSkipped} | ETA ${formatEta(progressState.startedAtMs, progressState.chunksCompleted, progressState.chunksTotal, { minElapsedMs: 10_000, minProgressRatio: 0.03 })}`;
+    const fileLine =
+      `[file    ] [${progressBar(progressState.currentFileChunksProcessed, Math.max(progressState.currentFileChunksTotal, 1))}] ` +
+      `${truncateFileLabel(progressState.currentFileLabel)} | ` +
+      `file ${progressState.currentFileIndex}/${progressState.filesTotal} | ` +
+      `chunk ${Math.min(progressState.currentChunkDisplayIndex, Math.max(progressState.currentChunkDisplayTotal, 0))}/${progressState.currentChunkDisplayTotal}`;
+    const chunkLine =
+      `[chunk   ] [${progressBar(progressState.currentChunkDisplayIndex, Math.max(progressState.currentChunkDisplayTotal, 1))}] ` +
+      `${progressState.currentChunkDisplayIndex}/${progressState.currentChunkDisplayTotal} | stage=${progressState.currentStage}`;
+
+    const snapshot = `${overallLine}|${fileLine}|${chunkLine}`;
+    if (snapshot !== progressState.lastRenderedSnapshot) {
+      progressState.lastRenderedSnapshot = snapshot;
+      progressState.lastVisibleUpdateAtMs = Date.now();
     }
 
-    const gateway = createRuntimeImporterGateway(cancellationToken);
+    if (progressState.rendered) {
+      process.stdout.write(`\x1b[${PROGRESS_LINE_COUNT}F`);
+    } else {
+      progressState.rendered = true;
+    }
+    process.stdout.write(`\x1b[2K${colorizeProgressLine("overall", overallLine)}\n`);
+    process.stdout.write(`\x1b[2K${colorizeProgressLine("file", fileLine)}\n`);
+    process.stdout.write(`\x1b[2K${colorizeProgressLine("message", chunkLine)}\n`);
+  };
 
-    for (let fileIndex = 0; fileIndex < discovered.supported.length; fileIndex += 1) {
-      cancellationToken.throwIfCancelled();
-      const file = discovered.supported[fileIndex];
-      const skipReasonByLimits = validateFileAgainstLimits(file, limits);
-      if (skipReasonByLimits) {
-        increment(summary.skipReasons, skipReasonByLimits);
-        summary.skippedFiles += 1;
-        audit.writeEvent("warning", {
-          file_path: file.absolutePath,
-          reason: skipReasonByLimits,
-        });
-        continue;
-      }
+  const clearProgress = (): void => {
+    if (!progressState.rendered) {
+      return;
+    }
+    process.stdout.write(`\x1b[${PROGRESS_LINE_COUNT}F`);
+    for (let i = 0; i < PROGRESS_LINE_COUNT; i += 1) {
+      process.stdout.write("\x1b[2K\n");
+    }
+    process.stdout.write(`\x1b[${PROGRESS_LINE_COUNT}F`);
+    progressState.rendered = false;
+  };
 
-      const parsed = await parseDocumentFile(file, limits);
-      if (parsed.reason) {
-        summary.skippedFiles += 1;
-        increment(summary.skipReasons, parsed.reason);
-        audit.writeEvent("warning", {
-          file_path: file.absolutePath,
-          reason: parsed.reason,
-        });
-        continue;
-      }
+  const logWithProgress = (line: string): void => {
+    clearProgress();
+    console.log(line);
+    renderProgress();
+  };
 
-      const checkpointKey = buildDocumentCheckpointKey(file.absolutePath);
-      const processedCount = checkpoint.getProcessedCount(file.absolutePath, checkpointKey);
-      if (processedCount > 0) {
-        summary.resumed = true;
-      }
-      const activeChunks = parsed.chunks.slice(processedCount);
-      if (activeChunks.length === 0) {
-        continue;
-      }
+  const maybeEmitHeartbeat = (): void => {
+    if (!progressState.rendered) {
+      return;
+    }
+    const now = Date.now();
+    if (now - progressState.lastVisibleUpdateAtMs < HEARTBEAT_INTERVAL_MS) {
+      return;
+    }
+    if (now - progressState.lastHeartbeatAtMs < HEARTBEAT_INTERVAL_MS) {
+      return;
+    }
+    progressState.lastHeartbeatAtMs = now;
+    logWithProgress(
+      colorizeProgressLine(
+        "heartbeat",
+        `[heartbeat] still working | file ${progressState.currentFileIndex}/${progressState.filesTotal} | chunk ${progressState.chunksCompleted}/${progressState.chunksTotal} | stage=${progressState.currentStage}`
+      )
+    );
+  };
 
-      audit.writeEvent("file_started", {
-        file_path: file.absolutePath,
-        relative_path: file.relativePath,
-        extension: file.extension,
-        file_index: fileIndex + 1,
-        file_total: discovered.supported.length,
-        chunk_total: parsed.chunks.length,
-      });
-      console.log(
-        `[document-import] file ${fileIndex + 1}/${discovered.supported.length}: ${file.relativePath} (${activeChunks.length} chunk(s) pending)`
-      );
-
-      for (let chunkOffset = 0; chunkOffset < activeChunks.length; chunkOffset += 1) {
-        cancellationToken.throwIfCancelled();
-        const chunk = activeChunks[chunkOffset];
-        const refIdBase = buildDocumentRefId(file.absolutePath, chunk.chunkIndex, chunk.content);
-        const payload = {
-          content: buildChunkContent(file, chunk),
-          project: options.project,
-          memory_type: "context" as const,
-          source_agent: "memorymesh-cli",
-          source_format: "document_import_v1",
-          source_type: "document" as const,
-          title: `${file.relativePath} [${chunk.chunkIndex + 1}/${chunk.chunkTotal}]`,
-          conversation_id: `file:${file.relativePath}`,
-          message_index: chunk.chunkIndex,
-          ref_id: refIdBase,
-          tags: buildDocumentTags(file),
-        };
-
-        if (importPolicy === "overwrite_existing") {
-          increment(summary.skipReasons, "overwrite_existing_not_supported");
-          summary.skippedChunks += 1;
-          checkpoint.advance(
-            file.absolutePath,
-            checkpointKey,
-            processedCount + chunkOffset + 1
-          );
-          audit.writeEvent("message_skipped", {
-            file_path: file.absolutePath,
-            chunk_index: chunk.chunkIndex,
-            reason: "overwrite_existing_not_supported",
-          });
-          continue;
+  try {
+    return await withRuntimeEnv(options.runtimeEnv, async () => {
+      try {
+        if (!options.dryRun) {
+          await ensureEmbeddingModelAvailable();
         }
 
-        if (importPolicy === "skip_existing") {
-          const existing = await withRuntimeEnv(options.runtimeEnv, async () =>
-            gateway.getMemoryByRef(refIdBase, options.project)
-          );
-          if (existing.length > 0) {
-            increment(summary.skipReasons, "already_exists");
-            summary.skippedChunks += 1;
+        const gateway = createRuntimeImporterGateway(cancellationToken);
+        for (const parsedFile of parsedOutput.files) {
+          if (parsedFile.status !== "skipped") {
+            continue;
+          }
+          if (parsedFile.reason) {
+            increment(summary.skipReasons, parsedFile.reason);
+          }
+          audit.writeEvent("warning", {
+            file_path: parsedFile.path,
+            reason: parsedFile.reason,
+          });
+        }
+
+        const supportedFiles = parsedOutput.files.filter((file) => file.status === "supported");
+        const filePlans: IDocumentFilePlan[] = [];
+        for (let fileIndex = 0; fileIndex < supportedFiles.length; fileIndex += 1) {
+          cancellationToken.throwIfCancelled();
+          const file = toDiscoveredFile(supportedFiles[fileIndex]);
+
+          const checkpointKey = buildDocumentCheckpointKey(file.absolutePath);
+          const processedCount = checkpoint.getProcessedCount(file.absolutePath, checkpointKey);
+          if (processedCount > 0) {
+            summary.resumed = true;
+            progressState.liveResumeSkipped += Math.min(processedCount, file.chunks.length);
+          }
+          const activeChunks = file.chunks.slice(processedCount);
+          if (activeChunks.length === 0) {
+            continue;
+          }
+          filePlans.push({
+            file,
+            fileIndex: filePlans.length + 1,
+            checkpointKey,
+            processedCount,
+            activeChunks,
+          });
+        }
+
+        progressState.filesTotal = filePlans.length;
+        progressState.chunksTotal = filePlans.reduce((acc, plan) => acc + plan.activeChunks.length, 0);
+        if (progressState.filesTotal > 0) {
+          heartbeatTimer = setInterval(maybeEmitHeartbeat, 1000);
+          if (typeof heartbeatTimer.unref === "function") {
+            heartbeatTimer.unref();
+          }
+          renderProgress();
+        }
+
+        for (const plan of filePlans) {
+          cancellationToken.throwIfCancelled();
+          const { file, checkpointKey, processedCount, activeChunks } = plan;
+
+          audit.writeEvent("file_started", {
+            file_path: file.absolutePath,
+            relative_path: file.relativePath,
+            extension: file.extension,
+            file_index: plan.fileIndex,
+            file_total: filePlans.length,
+            chunk_total: file.chunks.length,
+          });
+          progressState.currentFileIndex = plan.fileIndex;
+          progressState.currentFileLabel = file.relativePath;
+          progressState.currentFileChunksTotal = activeChunks.length;
+          progressState.currentFileChunksProcessed = 0;
+          progressState.currentChunkDisplayIndex = 0;
+          progressState.currentChunkDisplayTotal = activeChunks.length;
+          progressState.currentStage = "checking_existing";
+          renderProgress();
+
+          for (let chunkOffset = 0; chunkOffset < activeChunks.length; chunkOffset += 1) {
+            cancellationToken.throwIfCancelled();
+            const chunk = activeChunks[chunkOffset];
+            const displayChunkIndex = chunkOffset + 1;
+            progressState.currentChunkDisplayIndex = displayChunkIndex;
+            progressState.currentChunkDisplayTotal = activeChunks.length;
+            const refIdBase = buildDocumentRefId(file.absolutePath, chunk.chunkIndex, chunk.content);
+            const sourceMetadata = buildDocumentSourceMetadata(
+              file,
+              chunk,
+              options.project,
+              refIdBase
+            );
+            const payload = {
+              content: buildChunkContent(file, chunk),
+              project: options.project,
+              memory_type: "context" as const,
+              source_agent: "memorymesh-cli",
+              source_format: "document_import_v1",
+              source_type: "document" as const,
+              title: `${file.relativePath} [${chunk.chunkIndex + 1}/${chunk.chunkTotal}]`,
+              conversation_id: `file:${file.relativePath}`,
+              message_index: chunk.chunkIndex,
+              ref_id: refIdBase,
+              tags: buildDocumentTags(file),
+              source_metadata: sourceMetadata,
+            };
+
+            let existingMatches: Array<{ id: string }> = [];
+            if (importPolicy === "skip_existing" || importPolicy === "overwrite_existing") {
+              progressState.currentStage = "checking_existing";
+              renderProgress();
+              const existing = await gateway.getMemoryByRef(refIdBase, options.project);
+              existingMatches = existing.map((item) => ({ id: item.id }));
+            }
+
+            if (importPolicy === "skip_existing") {
+              if (existingMatches.length > 0) {
+                increment(summary.skipReasons, "already_exists");
+                summary.skippedChunks += 1;
+                progressState.liveSkipped += 1;
+                progressState.chunksCompleted += 1;
+                progressState.currentFileChunksProcessed += 1;
+                progressState.currentStage = "skipped";
+                checkpoint.advance(
+                  file.absolutePath,
+                  checkpointKey,
+                  processedCount + chunkOffset + 1
+                );
+                renderProgress();
+                audit.writeEvent("message_skipped", {
+                  file_path: file.absolutePath,
+                  chunk_index: chunk.chunkIndex,
+                  reason: "already_exists",
+                });
+                continue;
+              }
+            }
+
+            if (importPolicy === "overwrite_existing" && existingMatches.length > 0 && !options.dryRun) {
+              progressState.currentStage = "overwriting";
+              renderProgress();
+              if (!gateway.deleteMemoriesByIds) {
+                throw new Error("overwrite_existing requires deleteMemoriesByIds gateway support.");
+              }
+              await gateway.deleteMemoriesByIds(existingMatches.map((item) => item.id));
+              audit.writeEvent("message_stage_changed", {
+                file_path: file.absolutePath,
+                chunk_index: chunk.chunkIndex,
+                stage: "overwritten",
+                replaced_count: existingMatches.length,
+                ref_id: refIdBase,
+              });
+            }
+
+            progressState.currentStage = "saving";
+            renderProgress();
+            if (!options.dryRun) {
+              await notifyImportStarted();
+              progressState.currentStage = "embedding";
+              renderProgress();
+              await gateway.saveMemory(payload);
+            }
+
+            summary.importedChunks += 1;
+            progressState.liveSaved += 1;
+            progressState.chunksCompleted += 1;
+            progressState.currentFileChunksProcessed += 1;
+            progressState.currentStage = "checkpoint";
             checkpoint.advance(
               file.absolutePath,
               checkpointKey,
               processedCount + chunkOffset + 1
             );
-            audit.writeEvent("message_skipped", {
+            renderProgress();
+            audit.writeEvent("message_imported", {
               file_path: file.absolutePath,
               chunk_index: chunk.chunkIndex,
-              reason: "already_exists",
+              chunk_total: chunk.chunkTotal,
+              ref_id: refIdBase,
+              dry_run: Boolean(options.dryRun),
             });
-            continue;
           }
-        }
 
-        if (!options.dryRun) {
-          await notifyImportStarted();
-          await withRuntimeEnv(options.runtimeEnv, async () => {
-            await gateway.saveMemory(payload);
+          audit.writeEvent("file_completed", {
+            file_path: file.absolutePath,
           });
+          progressState.filesCompleted += 1;
+          progressState.currentStage = "completed";
+          renderProgress();
+          logWithProgress(
+            `[document-import] completed file ${plan.fileIndex}/${filePlans.length}: ${file.relativePath} (${progressState.currentFileChunksProcessed}/${activeChunks.length} chunks)`
+          );
         }
 
-        summary.importedChunks += 1;
-        checkpoint.advance(
-          file.absolutePath,
-          checkpointKey,
-          processedCount + chunkOffset + 1
-        );
-        audit.writeEvent("message_imported", {
-          file_path: file.absolutePath,
-          chunk_index: chunk.chunkIndex,
-          chunk_total: chunk.chunkTotal,
-          ref_id: refIdBase,
-          dry_run: Boolean(options.dryRun),
+        audit.writeEvent("run_completed", {
+          imported_chunks: summary.importedChunks,
+          skipped_chunks: summary.skippedChunks,
+          skipped_files: summary.skippedFiles,
+          skip_reasons: summary.skipReasons,
         });
+        return summary;
+      } finally {
+        await waitForBackgroundSaveTasks();
       }
-
-      audit.writeEvent("file_completed", {
-        file_path: file.absolutePath,
-      });
-    }
-
-    audit.writeEvent("run_completed", {
-      imported_chunks: summary.importedChunks,
-      skipped_chunks: summary.skippedChunks,
-      skipped_files: summary.skippedFiles,
-      skip_reasons: summary.skipReasons,
     });
-    return summary;
   } catch (error) {
     if (error instanceof ImportInterruptedError) {
       audit.writeEvent("run_interrupted", {
@@ -326,9 +527,107 @@ export async function importDocumentsFromPath(
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
-    await waitForBackgroundSaveTasks();
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+    }
+    clearProgress();
     await audit.close();
   }
+}
+
+async function parseDocumentInputWithRustPreferred(
+  absoluteInput: string,
+  limits: IDocumentImportLimits,
+  runtimeEnv: NodeJS.ProcessEnv | undefined,
+  parseWithRust: (
+    inputPath: string,
+    limits: IDocumentImportLimits,
+    env?: NodeJS.ProcessEnv
+  ) => Promise<IRustDocumentEngineOutput>
+): Promise<IRustDocumentEngineOutput> {
+  try {
+    return await parseWithRust(absoluteInput, limits, runtimeEnv ?? process.env);
+  } catch (error) {
+    console.warn(
+      `[document-import] rust parser unavailable, falling back to TypeScript parser: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return parseDocumentInputWithTypeScriptFallback(absoluteInput, limits);
+  }
+}
+
+async function parseDocumentInputWithTypeScriptFallback(
+  absoluteInput: string,
+  limits: IDocumentImportLimits
+): Promise<IRustDocumentEngineOutput> {
+  const discovered = await discoverSupportedFiles(absoluteInput);
+  const files: IRustDocumentFileResult[] = [];
+
+  for (const unsupported of discovered.unsupported) {
+    files.push({
+      path: unsupported.absolutePath,
+      relative_path: unsupported.relativePath,
+      extension: unsupported.extension,
+      size_bytes: unsupported.sizeBytes,
+      status: "skipped",
+      reason: "unsupported_extension",
+      chunks: [],
+    });
+  }
+
+  for (const file of discovered.supported) {
+    const skipReasonByLimits = validateFileAgainstLimits(file, limits);
+    if (skipReasonByLimits) {
+      files.push({
+        path: file.absolutePath,
+        relative_path: file.relativePath,
+        extension: file.extension,
+        size_bytes: file.sizeBytes,
+        status: "skipped",
+        reason: skipReasonByLimits,
+        chunks: [],
+      });
+      continue;
+    }
+
+    const parsed = await parseDocumentFile(file, limits);
+    if (parsed.reason) {
+      files.push({
+        path: file.absolutePath,
+        relative_path: file.relativePath,
+        extension: file.extension,
+        size_bytes: file.sizeBytes,
+        status: "skipped",
+        reason: parsed.reason,
+        chunks: [],
+      });
+      continue;
+    }
+
+    files.push({
+      path: file.absolutePath,
+      relative_path: file.relativePath,
+      extension: file.extension,
+      size_bytes: file.sizeBytes,
+      status: "supported",
+      reason: "parsed",
+      chunks: parsed.chunks.map((chunk) => ({
+        content: chunk.content,
+        chunk_index: chunk.chunkIndex,
+        chunk_total: chunk.chunkTotal,
+      })),
+    });
+  }
+
+  return {
+    scan_summary: {
+      discovered_files: discovered.totalFiles,
+      supported_files: files.filter((file) => file.status === "supported").length,
+      skipped_files: files.filter((file) => file.status === "skipped").length,
+    },
+    files,
+  };
 }
 
 async function parseDocumentFile(
@@ -497,7 +796,11 @@ function chunkText(
   }));
 }
 
-async function discoverSupportedFiles(inputPath: string): Promise<{ totalFiles: number; supported: IDiscoveredFile[] }> {
+async function discoverSupportedFiles(inputPath: string): Promise<{
+  totalFiles: number;
+  supported: IDiscoveredFile[];
+  unsupported: Array<Omit<IDiscoveredFile, "chunks">>;
+}> {
   const inputStat = await stat(inputPath);
   if (inputStat.isFile()) {
     const extension = normalizeExtension(inputPath);
@@ -507,34 +810,52 @@ async function discoverSupportedFiles(inputPath: string): Promise<{ totalFiles: 
           relativePath: basename(inputPath),
           extension,
           sizeBytes: inputStat.size,
+          chunks: [],
         }]
       : [];
     return {
       totalFiles: 1,
       supported,
+      unsupported: supported.length === 0
+        ? [{
+            absolutePath: inputPath,
+            relativePath: basename(inputPath),
+            extension,
+            sizeBytes: inputStat.size,
+          }]
+        : [],
     };
   }
 
   const allFiles: string[] = [];
   await walkFiles(inputPath, allFiles);
   const supported: IDiscoveredFile[] = [];
+  const unsupported: Array<Omit<IDiscoveredFile, "chunks">> = [];
   for (const filePath of allFiles) {
     const extension = normalizeExtension(filePath);
+    const fileStat = await stat(filePath);
     if (!SUPPORTED_EXTENSIONS.has(extension)) {
+      unsupported.push({
+        absolutePath: filePath,
+        relativePath: relative(inputPath, filePath) || basename(filePath),
+        extension,
+        sizeBytes: fileStat.size,
+      });
       continue;
     }
-    const fileStat = await stat(filePath);
     supported.push({
       absolutePath: filePath,
       relativePath: relative(inputPath, filePath) || basename(filePath),
       extension,
       sizeBytes: fileStat.size,
+      chunks: [],
     });
   }
 
   return {
     totalFiles: allFiles.length,
     supported,
+    unsupported,
   };
 }
 
@@ -595,13 +916,106 @@ function buildDocumentRefId(filePath: string, chunkIndex: number, content: strin
   return `import:document:${hash}`;
 }
 
+function buildDocumentSourceMetadata(
+  file: IDiscoveredFile,
+  chunk: IDocumentChunk,
+  project: string,
+  refId: string
+): ISourceMetadata {
+  return {
+    filename: basename(file.absolutePath),
+    source_path: file.absolutePath,
+    relative_path: file.relativePath,
+    source_extension: file.extension.replace(/^\./, ""),
+    chunk_index: chunk.chunkIndex + 1,
+    chunk_total: chunk.chunkTotal,
+    project,
+    ref_id: refId,
+  };
+}
+
 function buildDocumentCheckpointKey(filePath: string): string {
   const hash = createHash("sha256").update(filePath).digest("hex").slice(0, 16);
   return `doc:${hash}`;
 }
 
+function parseEmbeddingDimension(
+  value: string | undefined
+): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function toDiscoveredFile(file: IRustDocumentFileResult): IDiscoveredFile {
+  return {
+    absolutePath: file.path,
+    relativePath: file.relative_path,
+    extension: file.extension,
+    sizeBytes: file.size_bytes,
+    chunks: file.chunks.map((chunk) => ({
+      content: chunk.content,
+      chunkIndex: chunk.chunk_index,
+      chunkTotal: chunk.chunk_total,
+    })),
+  };
+}
+
 function increment(map: Record<string, number>, key: string): void {
   map[key] = (map[key] ?? 0) + 1;
+}
+
+function progressBar(current: number, total: number, width = 24): string {
+  const useAsciiFallback =
+    process.env.MEMORYMESH_PROGRESS_ASCII === "1"
+    || process.env.MEMORYMESH_PROGRESS_ASCII === "true";
+  const filledChar = useAsciiFallback ? "#" : "█";
+  const emptyChar = useAsciiFallback ? "-" : "░";
+  if (total <= 0) {
+    return emptyChar.repeat(width);
+  }
+  const ratio = Math.min(Math.max(current / total, 0), 1);
+  const filled = Math.round(ratio * width);
+  return `${filledChar.repeat(filled)}${emptyChar.repeat(width - filled)}`;
+}
+
+function formatEta(
+  startedAtMs: number,
+  completed: number,
+  total: number,
+  options: { minElapsedMs?: number; minProgressRatio?: number } = {}
+): string {
+  if (completed <= 0 || total <= 0) {
+    return "--:--";
+  }
+  const elapsedMs = Date.now() - startedAtMs;
+  if (elapsedMs <= 0) {
+    return "--:--";
+  }
+  const minElapsedMs = options.minElapsedMs ?? 0;
+  const minProgressRatio = options.minProgressRatio ?? 0;
+  const progressRatio = completed / total;
+  if (elapsedMs < minElapsedMs || progressRatio < minProgressRatio) {
+    return "--:--";
+  }
+  const estimatedTotalMs = (elapsedMs / completed) * total;
+  const remainingMs = Math.max(0, estimatedTotalMs - elapsedMs);
+  const seconds = Math.round(remainingMs / 1000);
+  const minutesPart = String(Math.floor(seconds / 60)).padStart(2, "0");
+  const secondsPart = String(seconds % 60).padStart(2, "0");
+  return `${minutesPart}:${secondsPart}`;
+}
+
+function truncateFileLabel(value: string, maxLength = 40): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 3)}...`;
 }
 
 function normalizeExtension(filePath: string): string {

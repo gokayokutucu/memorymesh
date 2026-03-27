@@ -1,10 +1,12 @@
 import type {
+  ISourceMetadata,
   ISaveMemoryResult,
   MemoryType,
   SourceType,
 } from "@memorymesh/core";
 
 export {
+  ISourceMetadata,
   MemoryType,
   SourceType,
   ISaveMemoryInput,
@@ -31,6 +33,7 @@ export interface IMemoryPayload {
   title?: string;
   ref_id?: string;
   source_type?: SourceType;
+  source_metadata?: ISourceMetadata;
 }
 
 export interface ISaveStoreState {

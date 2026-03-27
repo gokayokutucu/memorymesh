@@ -108,7 +108,20 @@ describe("graph-store query functions", () => {
       9,
       "conv-1",
       "m-parent",
-      "m-base"
+      "m-base",
+      "memorymesh-cli",
+      "document_import_v1",
+      0,
+      {
+        filename: "notes.md",
+        source_path: "/tmp/notes.md",
+        relative_path: "docs/notes.md",
+        source_extension: "md",
+        chunk_index: 1,
+        chunk_total: 4,
+        project: "MemoryMesh",
+        ref_id: "MM-900",
+      }
     );
 
     const firstCallQuery = String(mockRun.mock.calls[0][0]);
@@ -121,6 +134,12 @@ describe("graph-store query functions", () => {
         conversation_id: "conv-1",
         parent_memory_id: "m-parent",
         derived_from_memory_id: "m-base",
+        source_filename: "notes.md",
+        source_path: "/tmp/notes.md",
+        relative_path: "docs/notes.md",
+        source_extension: "md",
+        source_chunk_index: 1,
+        source_chunk_total: 4,
       })
     );
 

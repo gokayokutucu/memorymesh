@@ -10,12 +10,18 @@ import {
   getProfilerConfig,
   getSavePayloadConfig,
 } from "./config";
-import { getDocuments } from "./document-store";
-import { getRelated } from "./graph-store";
+import { deleteDocuments, getDocuments } from "./document-store";
+import { deleteNodes, getRelated } from "./graph-store";
 import { embed } from "./embeddings";
 import { buildPreview, orchestrateSave, orchestrateSearch } from "./orchestrator";
 import { Profiler } from "./profiler";
-import { ensureCollection, getPointsByIds, listProjects, searchPoints } from "./storage";
+import {
+  deletePointsByIds,
+  ensureCollection,
+  getPointsByIds,
+  listProjects,
+  searchPoints,
+} from "./storage";
 import {
   IGetRelatedMemoriesInput,
   IGetMemoryByRefInput,
@@ -70,6 +76,18 @@ export async function waitForBackgroundSaveTasks(): Promise<void> {
     return;
   }
   await Promise.allSettled(tasks);
+}
+
+export async function deleteMemoriesByIds(ids: string[]): Promise<void> {
+  if (ids.length === 0) {
+    return;
+  }
+  await ensureCollection();
+  await deletePointsByIds(ids);
+  await Promise.all([
+    deleteDocuments(ids),
+    deleteNodes(ids),
+  ]);
 }
 
 export async function searchMemory(

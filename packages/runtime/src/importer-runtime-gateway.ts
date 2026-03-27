@@ -6,6 +6,7 @@ import {
   ISearchResult,
 } from "@memorymesh/core";
 import {
+  deleteMemoriesByIds as deleteRuntimeMemoriesByIds,
   getMemoryByRef,
   getMemoryStatus,
   saveMemoryForImport,
@@ -58,6 +59,10 @@ export class RuntimeImporterGateway implements IImporterGateway {
       ref_id: refId,
       project,
     });
+  }
+
+  async deleteMemoriesByIds(ids: string[]): Promise<void> {
+    await deleteRuntimeMemoriesByIds(ids);
   }
 }
 

@@ -1,7 +1,9 @@
 import {
   detectLatestChatGptExportPath,
   expandHomePath,
+  persistLastStartedDocumentImportPath,
   persistLastStartedChatGptImportPath,
+  readLastStartedDocumentImportPath,
   readLastStartedChatGptImportPath,
 } from "./import-defaults";
 import { runDoctorCommand } from "./doctor";
@@ -23,6 +25,9 @@ import { runWizard, WizardStep } from "../ui/wizard";
 import { downMemoryMeshStack, startMemoryMeshStack } from "../system/docker";
 import { IStackContext } from "../system/stack-context";
 import { resolveAuthoritativeEmbeddingConfig } from "../installer/embedding-authority";
+import { renderSearchResultLines } from "./search";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 
 export interface IRuntimeMenuDeps {
   ui: IRuntimeMenuUi;
@@ -32,6 +37,8 @@ export interface IRuntimeMenuDeps {
   detectImportPath: (homeDir: string) => Promise<string | null>;
   readLastImportPath: (homeDir: string) => Promise<string | null>;
   persistLastImportPath: (homeDir: string, inputPath: string) => Promise<void>;
+  readLastDocumentImportPath: (homeDir: string) => Promise<string | null>;
+  persistLastDocumentImportPath: (homeDir: string, inputPath: string) => Promise<void>;
 }
 
 function createDefaultDeps(): IRuntimeMenuDeps {
@@ -43,6 +50,8 @@ function createDefaultDeps(): IRuntimeMenuDeps {
     detectImportPath: detectLatestChatGptExportPath,
     readLastImportPath: readLastStartedChatGptImportPath,
     persistLastImportPath: persistLastStartedChatGptImportPath,
+    readLastDocumentImportPath: readLastStartedDocumentImportPath,
+    persistLastDocumentImportPath: persistLastStartedDocumentImportPath,
   };
 }
 
@@ -225,20 +234,28 @@ async function handleImportChatGptAction(
 
 async function handleImportDocumentsAction(
   ui: IRuntimeMenuUi,
-  homeDir: string
+  homeDir: string,
+  readLastDocumentImportPath: (homeDir: string) => Promise<string | null>,
+  persistLastDocumentImportPath: (homeDir: string, inputPath: string) => Promise<void>
 ): Promise<number> {
   const defaultProject = "MemoryMesh";
   const defaultPolicy = "skip_existing";
+  const lastStartedImportPath = await readLastDocumentImportPath(homeDir);
 
   const steps: WizardStep[] = [
     {
       id: "path",
       run: async () => {
         while (true) {
+          const pathPromptMessage = lastStartedImportPath
+            ? "Path to file/folder to import (Tab to accept)"
+            : "Path to file/folder to import";
           const pathResult = await ui.promptInput({
-            label: "Path to file/folder to import",
-            placeholder: "~/Documents",
-            required: true,
+            label: pathPromptMessage,
+            placeholder: lastStartedImportPath ?? "~/Documents",
+            tabCycleValues: lastStartedImportPath ? [lastStartedImportPath] : undefined,
+            defaultValue: lastStartedImportPath ?? undefined,
+            required: !lastStartedImportPath,
           });
           if (pathResult.status === "cancel") {
             return { type: "cancel" };
@@ -336,21 +353,17 @@ async function handleImportDocumentsAction(
     project,
     "--import-policy",
     importPolicy,
-  ]);
+  ], {
+    onImportStarted: async (startedPath: string) => {
+      await persistLastDocumentImportPath(homeDir, startedPath);
+    },
+  });
   if (code === 0) {
     await ui.note("Document import completed.");
   } else {
     await ui.note("Document import failed. Check logs and retry.");
   }
   return code;
-}
-
-function truncateContent(content: string, maxChars = 80): string {
-  if (content.length <= maxChars) {
-    return content;
-  }
-
-  return `${content.slice(0, maxChars - 3)}...`;
 }
 
 async function handleSearchAction(ui: IRuntimeMenuUi): Promise<number> {
@@ -386,9 +399,10 @@ async function handleSearchAction(ui: IRuntimeMenuUi): Promise<number> {
     await ui.note(`Found ${result.results.length} result(s) for "${trimmed}":`);
     for (let i = 0; i < result.results.length; i += 1) {
       const item = result.results[i];
-      const snippet = truncateContent(item.snippet, 120);
-      const source = item.source ? ` | source=${item.source}` : "";
-      await ui.note(`${i + 1}. ${snippet}${source}`);
+      const lines = renderSearchResultLines(item, i + 1, { snippetMaxChars: 120 });
+      for (const line of lines) {
+        await ui.note(line);
+      }
     }
   }
 }
@@ -456,7 +470,8 @@ async function handleSettingsAction(
           runner,
           stackContext,
           nextRuntimeEnv,
-          installConfig.stackMode ?? "release-image"
+          installConfig.stackMode ?? "release-image",
+          homeDir
         );
       },
     });
@@ -498,13 +513,15 @@ async function runEmbeddingReset(
   runner: ICommandRunner,
   stackContext: IStackContext,
   runtimeEnv: NodeJS.ProcessEnv,
-  stackMode: "release-image" | "local-dev-build"
+  stackMode: "release-image" | "local-dev-build",
+  homeDir: string
 ): Promise<void> {
   await ui.note("Resetting MemoryMesh state...");
   const downResult = await downMemoryMeshStack(runner, stackContext, true);
   if (!downResult.ok) {
     throw new Error(downResult.message);
   }
+  await clearCheckpointState(homeDir);
 
   const startResult = await startMemoryMeshStack(
     runner,
@@ -516,6 +533,11 @@ async function runEmbeddingReset(
     throw new Error(startResult.message);
   }
   await ui.note("Reset complete. Continuing action.");
+}
+
+async function clearCheckpointState(homeDir: string): Promise<void> {
+  const checkpointsDir = join(homeDir, ".memorymesh", "checkpoints");
+  await rm(checkpointsDir, { recursive: true, force: true });
 }
 
 async function ensureEmbeddingCompatibilityOrReset(
@@ -545,7 +567,8 @@ async function ensureEmbeddingCompatibilityOrReset(
           runner,
           stackContext,
           authority.runtimeEnv,
-          authority.config.stackMode ?? "release-image"
+          authority.config.stackMode ?? "release-image",
+          homeDir
         );
       },
     });
@@ -608,7 +631,9 @@ export async function runRuntimeMenu(
       }
       await handleImportDocumentsAction(
         resolved.ui,
-        resolved.homeDir
+        resolved.homeDir,
+        resolved.readLastDocumentImportPath,
+        resolved.persistLastDocumentImportPath
       );
       continue;
     }
@@ -669,7 +694,7 @@ export async function runRuntimeMenu(
         continue;
       }
       await resolved.ui.note(
-        "Starting MCP bridge (long-running). Use Ctrl+C to stop when finished."
+        "Starting MCP bridge (foreground). Press Ctrl+C to stop."
       );
       const code = await runMcpCommand([], { runner: resolved.runner });
       if (code !== 0) {

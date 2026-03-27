@@ -1,4 +1,7 @@
-import { runRustImporterEngine } from "../rust-engine";
+import {
+  runRustDocumentImporterEngine,
+  runRustImporterEngine,
+} from "../rust-engine";
 
 jest.mock("node:child_process", () => ({
   execFile: jest.fn(),
@@ -143,5 +146,210 @@ describe("rust-engine", () => {
       scan_summary: { scanned_json_files: 0 },
       files: [],
     });
+  });
+
+  it("parses successful rust document engine output", async () => {
+    mockedExecFile.mockImplementation(
+      (
+        _command: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        expect(args[0]).toBe("documents");
+        callback(
+          null,
+          JSON.stringify({
+            scan_summary: {
+              discovered_files: 1,
+              supported_files: 1,
+              skipped_files: 0,
+            },
+            files: [
+              {
+                path: "/tmp/a.txt",
+                relative_path: "a.txt",
+                extension: ".txt",
+                size_bytes: 12,
+                status: "supported",
+                reason: "parsed",
+                chunks: [
+                  { content: "hello", chunk_index: 0, chunk_total: 1 },
+                ],
+              },
+            ],
+          }),
+          ""
+        );
+      }
+    );
+
+    const result = await runRustDocumentImporterEngine("/tmp/in", {
+      max_file_size_mb: 5,
+      max_chars_per_file: 100000,
+      max_chunks_per_file: 200,
+      chunk_size: 1200,
+      chunk_overlap: 150,
+    });
+    expect(result.scan_summary.supported_files).toBe(1);
+    expect(result.files[0].chunks).toHaveLength(1);
+  });
+
+  it("throws on malformed rust document json output", async () => {
+    mockedExecFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        callback(null, "not-json", "");
+      }
+    );
+
+    await expect(
+      runRustDocumentImporterEngine("/tmp/in", {
+        max_file_size_mb: 5,
+        max_chars_per_file: 100000,
+        max_chunks_per_file: 200,
+        chunk_size: 1200,
+        chunk_overlap: 150,
+      })
+    ).rejects.toThrow("Rust document importer engine returned malformed JSON output");
+  });
+
+  it("rebuilds legacy rust binary output and retries document mode", async () => {
+    mockedExecFile.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        if (command === "cargo") {
+          expect(args[0]).toBe("build");
+          callback(null, "", "");
+          return;
+        }
+
+        if (args[0] === "documents") {
+          if (!mockedExecFile.mock.calls.some((call) => call[0] === "cargo")) {
+            callback(
+              null,
+              JSON.stringify({
+                scan_summary: {
+                  scanned_json_files: 0,
+                  supported_conversation_file: 0,
+                  unsupported_conversation_schema: 0,
+                  ignorable_json: 0,
+                  unknown_json: 0,
+                  invalid_json: 0,
+                },
+                files: [],
+              }),
+              ""
+            );
+            return;
+          }
+
+          callback(
+            null,
+            JSON.stringify({
+              scan_summary: {
+                discovered_files: 1,
+                supported_files: 1,
+                skipped_files: 0,
+              },
+              files: [
+                {
+                  path: "/tmp/a.txt",
+                  relative_path: "a.txt",
+                  extension: ".txt",
+                  size_bytes: 12,
+                  status: "supported",
+                  reason: "parsed",
+                  chunks: [
+                    { content: "hello", chunk_index: 0, chunk_total: 1 },
+                  ],
+                },
+              ],
+            }),
+            ""
+          );
+          return;
+        }
+
+        callback(new Error("unexpected command path"), "", "");
+      }
+    );
+
+    await expect(
+      runRustDocumentImporterEngine("/tmp/in", {
+        max_file_size_mb: 5,
+        max_chars_per_file: 100000,
+        max_chunks_per_file: 200,
+        chunk_size: 1200,
+        chunk_overlap: 150,
+      })
+    ).resolves.toMatchObject({
+      scan_summary: {
+        discovered_files: 1,
+        supported_files: 1,
+        skipped_files: 0,
+      },
+      files: [
+        expect.objectContaining({
+          path: "/tmp/a.txt",
+          status: "supported",
+        }),
+      ],
+    });
+  });
+
+  it("throws clear error when legacy output rebuild fails", async () => {
+    mockedExecFile.mockImplementation(
+      (
+        command: string,
+        args: string[],
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void
+      ) => {
+        if (command === "cargo") {
+          callback(new Error("cargo build failed"), "", "build error");
+          return;
+        }
+
+        if (args[0] === "documents") {
+          callback(
+            null,
+            JSON.stringify({
+              scan_summary: {
+                scanned_json_files: 0,
+                supported_conversation_file: 0,
+                unsupported_conversation_schema: 0,
+                ignorable_json: 0,
+                unknown_json: 0,
+                invalid_json: 0,
+              },
+              files: [],
+            }),
+            ""
+          );
+          return;
+        }
+
+        callback(new Error("unexpected command path"), "", "");
+      }
+    );
+
+    await expect(
+      runRustDocumentImporterEngine("/tmp/in", {
+        max_file_size_mb: 5,
+        max_chars_per_file: 100000,
+        max_chunks_per_file: 200,
+        chunk_size: 1200,
+        chunk_overlap: 150,
+      })
+    ).rejects.toThrow("Detected legacy Rust importer output contract. Rebuild failed");
   });
 });

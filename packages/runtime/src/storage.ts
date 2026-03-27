@@ -84,6 +84,21 @@ export async function searchPoints(
   if (input.source_type) {
     must.push({ key: "source_type", match: { value: input.source_type } });
   }
+  if (input.filename) {
+    must.push({ key: "source_metadata.filename", match: { value: input.filename } });
+  }
+  if (input.source_path) {
+    must.push({ key: "source_metadata.source_path", match: { value: input.source_path } });
+  }
+  if (input.relative_path) {
+    must.push({ key: "source_metadata.relative_path", match: { value: input.relative_path } });
+  }
+  if (input.source_extension) {
+    must.push({
+      key: "source_metadata.source_extension",
+      match: { value: input.source_extension },
+    });
+  }
   if (input.before) {
     must.push({ key: "created_at", range: { lt: input.before } });
   }
@@ -126,6 +141,7 @@ export async function searchPoints(
         title: p.title,
         ref_id: p.ref_id,
         source_type: p.source_type,
+        source_metadata: p.source_metadata,
       };
     });
 
@@ -164,6 +180,7 @@ export async function searchPoints(
       title: p.title,
       ref_id: p.ref_id,
       source_type: p.source_type,
+      source_metadata: p.source_metadata,
     };
   });
 
@@ -247,8 +264,25 @@ export async function getPointsByIds(ids: string[]): Promise<ISearchResult[]> {
       title: payload.title,
       ref_id: payload.ref_id,
       source_type: payload.source_type,
+      source_metadata: payload.source_metadata,
     };
   });
+}
+
+export async function deletePointsByIds(ids: string[]): Promise<boolean> {
+  if (ids.length === 0) {
+    return true;
+  }
+
+  await executeQdrantOperation(
+    "delete",
+    async () =>
+      createQdrantClient().delete(resolveCollectionConfig().collection, {
+        wait: true,
+        points: ids,
+      })
+  );
+  return true;
 }
 
 async function executeQdrantOperation<T>(

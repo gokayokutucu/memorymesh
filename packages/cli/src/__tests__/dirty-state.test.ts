@@ -48,8 +48,11 @@ function createFs(existingPaths: string[]): IFileSystem {
 }
 
 describe("dirty-state detection", () => {
-  it("detects dirty state via Qdrant collections HTTP endpoint", async () => {
-    const fs = createFs([]);
+  it("detects dirty state via Qdrant collections HTTP endpoint when managed footprint exists", async () => {
+    const fs = createFs([
+      "/tmp/home/.memorymesh",
+      "/tmp/home/.memorymesh/stack/docker-compose.yml",
+    ]);
     const runner = new FakeRunner(
       JSON.stringify({
         result: {
@@ -65,6 +68,23 @@ describe("dirty-state detection", () => {
     expect(report.details).toContain("Qdrant collections detected.");
   });
 
+  it("ignores Qdrant collections when no managed footprint exists", async () => {
+    const fs = createFs([]);
+    const runner = new FakeRunner(
+      JSON.stringify({
+        result: {
+          collections: [{ name: "memories" }],
+        },
+      })
+    );
+
+    const report = await inspectDirtySetupState("/tmp/home", fs, runner);
+
+    expect(report.hasDirtyState).toBe(false);
+    expect(report.signals.qdrantHasCollections).toBe(false);
+    expect(report.details).not.toContain("Qdrant collections detected.");
+  });
+
   it("does not crash when Qdrant HTTP is unavailable", async () => {
     const fs = createFs([]);
     const runner = new FakeRunner(null);
@@ -75,4 +95,3 @@ describe("dirty-state detection", () => {
     expect(report.signals.qdrantHasCollections).toBe(false);
   });
 });
-
