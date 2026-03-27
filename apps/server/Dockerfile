@@ -9,7 +9,7 @@ COPY packages/cli/package*.json ./packages/cli/
 RUN npm install
 
 COPY . .
-RUN npm run build --workspace=@memorymesh/server
+RUN npm run build
 
 WORKDIR /app/apps/server
 CMD ["node", "dist/index.js"]
