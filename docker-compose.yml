@@ -13,6 +13,25 @@ services:
     volumes:
       - ollama_models:/root/.ollama
 
+  ollama-model-init:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        echo "[ollama-model-init] waiting for ollama..."
+        until ollama list >/dev/null 2>&1; do sleep 2; done
+        echo "[ollama-model-init] pulling model: $$EMBEDDING_MODEL"
+        ollama pull "$$EMBEDDING_MODEL"
+        echo "[ollama-model-init] model ready: $$EMBEDDING_MODEL"
+    restart: "no"
+
   mongodb:
     image: mongo:7
     ports:
@@ -33,12 +52,22 @@ services:
       - neo4j_data:/data
 
   memorymesh:
-    build: .
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    env_file:
+      - .env
     depends_on:
-      - qdrant
-      - ollama
-      - mongodb
-      - neo4j
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_started
+      ollama-model-init:
+        condition: service_completed_successfully
+      mongodb:
+        condition: service_started
+      neo4j:
+        condition: service_started
     ports:
       - "${HTTP_PORT:-3456}:${HTTP_PORT:-3456}"
     environment:
@@ -48,7 +77,7 @@ services:
       - QDRANT_PORT=6333
       - OLLAMA_HOST=ollama
       - OLLAMA_PORT=11434
-      - EMBEDDING_MODEL=nomic-embed-text
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
       - QDRANT_COLLECTION=memories
       - MONGO_HOST=mongodb
       - MONGO_PORT=27017
