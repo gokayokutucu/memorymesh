@@ -1,7 +1,14 @@
 import { resolve } from "node:path";
 import { IImportPolicy } from "@memorymesh/core";
-import { IFolderImportSummary, importFromPath } from "../folder-import";
+import type { IFolderImportOptions, IFolderImportSummary } from "../folder-import";
 import { IStyle, style } from "../terminal-style";
+import { ExecaCommandRunner, ICommandRunner } from "../system/command-runner";
+import { nodeFileSystem } from "../system/filesystem";
+import { resolveUserHomeDir } from "../system/runtime-home";
+import {
+  IResolvedAuthority,
+  resolveAuthoritativeEmbeddingConfig,
+} from "../installer/embedding-authority";
 
 export interface IImportGptArgs {
   path?: string;
@@ -24,9 +31,15 @@ export interface ICommandLogger {
 }
 
 export interface IImportCommandDeps {
-  importer: typeof importFromPath;
+  importer: (
+    inputPath: string,
+    options: IFolderImportOptions
+  ) => Promise<IFolderImportSummary>;
   logger: ICommandLogger;
   style: IStyle;
+  resolveEmbeddingAuthority: () => Promise<IResolvedAuthority>;
+  runner: ICommandRunner;
+  onImportStarted: (inputPath: string) => Promise<void> | void;
 }
 
 const DEFAULT_ARGS: IImportGptArgs = {
@@ -249,14 +262,80 @@ export function printImportSummary(
   }
 }
 
+function extractCollectionVectorSize(raw: unknown): number | null {
+  const parsed = raw as {
+    result?: {
+      config?: {
+        params?: {
+          vectors?:
+            | { size?: number }
+            | Record<string, { size?: number }>
+            | null;
+        };
+      };
+    };
+  };
+  const vectors = parsed.result?.config?.params?.vectors;
+  if (!vectors) {
+    return null;
+  }
+
+  if (typeof vectors === "object" && "size" in vectors) {
+    const size = (vectors as { size?: number }).size;
+    return typeof size === "number" ? size : null;
+  }
+
+  for (const value of Object.values(vectors as Record<string, { size?: number }>)) {
+    if (typeof value?.size === "number") {
+      return value.size;
+    }
+  }
+
+  return null;
+}
+
+async function detectQdrantCollectionDimension(
+  runner: ICommandRunner,
+  collectionName: string
+): Promise<number | null> {
+  const result = await runner.run("curl", [
+    "-fsS",
+    `http://localhost:6333/collections/${collectionName}`,
+  ]);
+  if (!result.success) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    return extractCollectionVectorSize(parsed);
+  } catch {
+    return null;
+  }
+}
+
 export async function runImportGptCommand(
   argv: string[],
   deps: Partial<IImportCommandDeps> = {}
 ): Promise<number> {
   const resolvedDeps: IImportCommandDeps = {
-    importer: deps.importer ?? importFromPath,
+    importer:
+      deps.importer ??
+      (async (inputPath: string, options: IFolderImportOptions) => {
+        const { importFromPath } = await import("../folder-import");
+        return importFromPath(inputPath, options);
+      }),
     logger: deps.logger ?? console,
     style: deps.style ?? style,
+    resolveEmbeddingAuthority:
+      deps.resolveEmbeddingAuthority
+      ?? (() =>
+        resolveAuthoritativeEmbeddingConfig(
+          resolveUserHomeDir(process.platform, process.env),
+          nodeFileSystem
+        )),
+    runner: deps.runner ?? new ExecaCommandRunner(),
+    onImportStarted: deps.onImportStarted ?? (() => undefined),
   };
 
   const args = parseImportGptArgs(argv);
@@ -266,7 +345,51 @@ export async function runImportGptCommand(
   }
 
   try {
-    const result = await resolvedDeps.importer(resolve(args.path), {
+    const authority = await resolvedDeps.resolveEmbeddingAuthority();
+    const resolvedEmbedding = authority.embedding;
+    const runtimeEnvForImport: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...authority.runtimeEnv,
+    };
+    const selectedModel = resolvedEmbedding.embeddingModel;
+    const selectedDimension = resolvedEmbedding.embeddingDimension;
+    const selectedMode = resolvedEmbedding.embeddingMode;
+    const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
+
+    if (selectedModel && selectedDimension) {
+      const collectionDimension = await detectQdrantCollectionDimension(
+        resolvedDeps.runner,
+        collectionName
+      );
+      if (collectionDimension) {
+        resolvedDeps.logger.log(
+          `Detected existing Qdrant collection with dimension: ${collectionDimension}`
+        );
+        resolvedDeps.logger.log(`Current embedding dimension: ${selectedDimension}`);
+
+        if (collectionDimension !== selectedDimension) {
+          throw new Error(
+            `Embedding mismatch detected. Existing collection dimension: ${collectionDimension}. Current embedding dimension: ${selectedDimension}. Please run 'memorymesh reset' or re-run setup.`
+          );
+        }
+      }
+    }
+
+    if (args.engine === "rust") {
+      resolvedDeps.logger.log(
+        `Rust import embedding model resolved: ${selectedModel}`
+      );
+      resolvedDeps.logger.log(
+        `Rust import embedding dimension resolved: ${selectedDimension}`
+      );
+      resolvedDeps.logger.log(
+        `Rust import embedding mode resolved: ${selectedMode}`
+      );
+      resolvedDeps.logger.log("Source: installer runtime config");
+    }
+
+    const resolvedInputPath = resolve(args.path);
+    const result = await resolvedDeps.importer(resolvedInputPath, {
       project: args.project,
       dryRun: args.dryRun,
       limit: args.limit,
@@ -277,7 +400,12 @@ export async function runImportGptCommand(
       importPolicy: args.importPolicy,
       checkpointEnabled: args.checkpoint,
       resetCheckpoint: args.resetCheckpoint,
+      runtimeEnv: runtimeEnvForImport,
+      onImportStarted: async () => {
+        await resolvedDeps.onImportStarted(resolvedInputPath);
+      },
     });
+
     printImportSummary(result, resolvedDeps.logger, resolvedDeps.style);
     return 0;
   } catch (error) {

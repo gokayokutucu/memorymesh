@@ -1,14 +1,22 @@
 import { IImporterGateway, ISaveMemoryInput, ISearchResult } from "@memorymesh/core";
 import { importConversations } from "../gpt-importer";
-import { createRuntimeImporterGateway, ensureEmbeddingModelAvailable } from "@memorymesh/runtime";
+import {
+  createRuntimeImporterGateway,
+  ensureEmbeddingModelAvailable,
+} from "@memorymesh/runtime";
 
 jest.mock("@memorymesh/runtime", () => ({
   createRuntimeImporterGateway: jest.fn(),
   ensureEmbeddingModelAvailable: jest.fn(),
+  waitForBackgroundSaveTasks: jest.fn(async () => undefined),
 }));
 
 const createRuntimeImporterGatewayMock = jest.mocked(createRuntimeImporterGateway);
 const ensureEmbeddingModelAvailableMock = jest.mocked(ensureEmbeddingModelAvailable);
+const runtimeModule = jest.requireMock("@memorymesh/runtime") as {
+  waitForBackgroundSaveTasks: jest.Mock<Promise<void>, []>;
+};
+const waitForBackgroundSaveTasksMock = runtimeModule.waitForBackgroundSaveTasks;
 
 function createGateway(
   getByRef: (refId: string, project?: string) => Promise<ISearchResult[]>,
@@ -30,6 +38,8 @@ describe("cli gpt-importer local gateway path", () => {
   beforeEach(() => {
     createRuntimeImporterGatewayMock.mockReset();
     ensureEmbeddingModelAvailableMock.mockReset();
+    waitForBackgroundSaveTasksMock.mockReset();
+    waitForBackgroundSaveTasksMock.mockResolvedValue(undefined);
   });
 
   it("runs quiet by default and shows progress output", async () => {
@@ -254,5 +264,43 @@ describe("cli gpt-importer local gateway path", () => {
       code: "embedding_model_missing",
     });
     expect(ensureEmbeddingModelAvailableMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for runtime background saves before returning in local real-import mode", async () => {
+    const gateway = createGateway(async () => [], async () => undefined);
+
+    await importConversations(
+      [
+        {
+          title: "Conv Wait",
+          messages: [{ role: "assistant", content: "Decision: wait for background save." }],
+        },
+      ],
+      "MemoryMesh",
+      false,
+      { delayMs: 0, gateway }
+    );
+
+    expect(waitForBackgroundSaveTasksMock).not.toHaveBeenCalled();
+  });
+
+  it("waits for runtime background saves when using default local runtime gateway", async () => {
+    createRuntimeImporterGatewayMock.mockReturnValue(
+      createGateway(async () => [], async () => undefined)
+    );
+
+    await importConversations(
+      [
+        {
+          title: "Conv Wait Runtime",
+          messages: [{ role: "assistant", content: "Decision: use local runtime gateway." }],
+        },
+      ],
+      "MemoryMesh",
+      false,
+      { delayMs: 0 }
+    );
+
+    expect(waitForBackgroundSaveTasksMock).toHaveBeenCalledTimes(1);
   });
 });

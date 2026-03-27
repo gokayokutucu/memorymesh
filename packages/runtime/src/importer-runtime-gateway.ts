@@ -1,9 +1,12 @@
 import {
+  ICancellationToken,
   IImporterGateway,
+  ImportInterruptedError,
   ISaveMemoryInput,
   ISearchResult,
 } from "@memorymesh/core";
 import {
+  deleteMemoriesByIds as deleteRuntimeMemoriesByIds,
   getMemoryByRef,
   getMemoryStatus,
   saveMemoryForImport,
@@ -16,8 +19,12 @@ const SAVE_STATUS_TIMEOUT_MS = Number.parseInt(
 );
 
 export class RuntimeImporterGateway implements IImporterGateway {
+  constructor(private readonly cancellationToken?: ICancellationToken) {}
+
   async saveMemory(input: ISaveMemoryInput): Promise<void> {
-    const result = saveMemoryForImport(input);
+    const result = saveMemoryForImport(input, {
+      cancellationToken: this.cancellationToken,
+    });
     if (result.status === "failed") {
       throw toImportSaveError(result.error_code, result.payload_bytes, result.max_payload_bytes);
     }
@@ -53,10 +60,16 @@ export class RuntimeImporterGateway implements IImporterGateway {
       project,
     });
   }
+
+  async deleteMemoriesByIds(ids: string[]): Promise<void> {
+    await deleteRuntimeMemoriesByIds(ids);
+  }
 }
 
-export function createRuntimeImporterGateway(): IImporterGateway {
-  return new RuntimeImporterGateway();
+export function createRuntimeImporterGateway(
+  cancellationToken?: ICancellationToken
+): IImporterGateway {
+  return new RuntimeImporterGateway(cancellationToken);
 }
 
 async function waitForFinalSaveStatus(
@@ -87,6 +100,9 @@ function toImportSaveError(
   payloadBytes?: number,
   maxPayloadBytes?: number
 ): Error {
+  if (code === "import_interrupted") {
+    return new ImportInterruptedError();
+  }
   const error = new Error(code ?? "save_failed") as Error & {
     code?: string;
     payload_bytes?: number;

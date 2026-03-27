@@ -11,6 +11,8 @@ const mockCreateRuntimeImporterGateway = jest.fn(() => mockGateway);
 
 jest.mock("@memorymesh/runtime", () => ({
   createRuntimeImporterGateway: () => mockCreateRuntimeImporterGateway(),
+  ensureEmbeddingModelAvailable: jest.fn(async () => undefined),
+  waitForBackgroundSaveTasks: jest.fn(async () => undefined),
 }));
 
 describe("gpt-importer runtime gateway wiring", () => {

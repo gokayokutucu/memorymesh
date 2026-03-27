@@ -1,5 +1,9 @@
 import { parseConversations, importConversations, IImportRunOptions } from "./gpt-importer";
-import { IGptConversation } from "@memorymesh/core";
+import {
+  CancellationToken,
+  IGptConversation,
+  ImportInterruptedError,
+} from "@memorymesh/core";
 import { JsonFileCategory } from "./json-shape-classifier";
 import { IScanReport, scanJsonInputPath } from "./folder-scan";
 import { IRustEngineOutput, runRustImporterEngine } from "./rust-engine";
@@ -21,6 +25,8 @@ export interface IFolderImportOptions extends IImportRunOptions {
   resetCheckpoint?: boolean;
   auditEnabled?: boolean;
   auditDirectory?: string;
+  runtimeEnv?: NodeJS.ProcessEnv;
+  onImportStarted?: () => Promise<void> | void;
 }
 
 export interface IFolderImportSummary {
@@ -43,7 +49,11 @@ export interface IFolderImportDependencies {
   parse: typeof parseConversations;
   importer: typeof importConversations;
   scanTs: typeof scanJsonInputPath;
-  scanRust: typeof runRustImporterEngine;
+  scanRust: (
+    inputPath: string,
+    binaryPath?: string,
+    env?: NodeJS.ProcessEnv
+  ) => Promise<IRustEngineOutput>;
 }
 
 interface ISelectedConversationWithOffset {
@@ -76,24 +86,46 @@ interface IRunPositionState {
   checkpoint_next_message_count?: number;
 }
 
-class ImportInterruptedError extends Error {
-  readonly signal?: NodeJS.Signals;
-  readonly reason: "signal" | "debug_stop";
-
-  constructor(reason: "signal" | "debug_stop", signal?: NodeJS.Signals) {
-    super(
-      reason === "signal"
-        ? `Import interrupted by ${signal ?? "signal"}`
-        : "Import interrupted by debug stop threshold"
-    );
-    this.name = "ImportInterruptedError";
-    this.signal = signal;
-    this.reason = reason;
-  }
-}
-
 const PROGRESS_LINE_COUNT = 3;
 const HEARTBEAT_INTERVAL_MS = 10_000;
+
+async function withRuntimeEnv<T>(
+  runtimeEnv: NodeJS.ProcessEnv | undefined,
+  action: () => Promise<T>
+): Promise<T> {
+  if (!runtimeEnv) {
+    return action();
+  }
+
+  const previous = {
+    EMBEDDING_MODEL: process.env.EMBEDDING_MODEL,
+    MEMORYMESH_EMBEDDING_MODE: process.env.MEMORYMESH_EMBEDDING_MODE,
+    MEMORYMESH_EMBEDDING_DIMENSION: process.env.MEMORYMESH_EMBEDDING_DIMENSION,
+  };
+
+  process.env.EMBEDDING_MODEL = runtimeEnv.EMBEDDING_MODEL;
+  process.env.MEMORYMESH_EMBEDDING_MODE = runtimeEnv.MEMORYMESH_EMBEDDING_MODE;
+  process.env.MEMORYMESH_EMBEDDING_DIMENSION = runtimeEnv.MEMORYMESH_EMBEDDING_DIMENSION;
+  try {
+    return await action();
+  } finally {
+    if (previous.EMBEDDING_MODEL === undefined) {
+      delete process.env.EMBEDDING_MODEL;
+    } else {
+      process.env.EMBEDDING_MODEL = previous.EMBEDDING_MODEL;
+    }
+    if (previous.MEMORYMESH_EMBEDDING_MODE === undefined) {
+      delete process.env.MEMORYMESH_EMBEDDING_MODE;
+    } else {
+      process.env.MEMORYMESH_EMBEDDING_MODE = previous.MEMORYMESH_EMBEDDING_MODE;
+    }
+    if (previous.MEMORYMESH_EMBEDDING_DIMENSION === undefined) {
+      delete process.env.MEMORYMESH_EMBEDDING_DIMENSION;
+    } else {
+      process.env.MEMORYMESH_EMBEDDING_DIMENSION = previous.MEMORYMESH_EMBEDDING_DIMENSION;
+    }
+  }
+}
 
 export async function importFromPath(
   inputPath: string,
@@ -134,6 +166,12 @@ export async function importFromPath(
       engine,
       import_policy: options.importPolicy ?? "skip_existing",
       execution_mode: executionMode,
+      import_kind: "gpt",
+      embedding_mode: options.runtimeEnv?.MEMORYMESH_EMBEDDING_MODE,
+      embedding_model: options.runtimeEnv?.EMBEDDING_MODEL,
+      embedding_dimension: parseEmbeddingDimension(
+        options.runtimeEnv?.MEMORYMESH_EMBEDDING_DIMENSION
+      ),
     },
     {
       enabled: options.checkpointEnabled ?? true,
@@ -141,6 +179,18 @@ export async function importFromPath(
     }
   );
   const checkpointState = checkpoint.getState();
+  let importStartNotified = false;
+  const notifyImportStarted = async (): Promise<void> => {
+    if (importStartNotified) {
+      return;
+    }
+    importStartNotified = true;
+    try {
+      await options.onImportStarted?.();
+    } catch {
+      // Persisting import-start metadata must not block import execution.
+    }
+  };
   const runPosition: IRunPositionState = {};
   audit.writeEvent("run_started", {
     dry_run: options.dryRun,
@@ -168,7 +218,11 @@ export async function importFromPath(
   const report =
     engine === "rust"
       ? toScanReport(
-          await resolvedDeps.scanRust(inputPath, options.rustBinaryPath)
+          await resolvedDeps.scanRust(
+            inputPath,
+            options.rustBinaryPath,
+            options.runtimeEnv ?? process.env
+          )
         )
       : resolvedDeps.scanTs(inputPath);
   console.log("Scan complete.");
@@ -317,9 +371,11 @@ export async function importFromPath(
   let completedMessageOutcomes = 0;
   let interruptionRequested = false;
   let interruptionSignal: NodeJS.Signals | undefined;
+  const cancellationToken = new CancellationToken();
   const onInterruptSignal = (signal: NodeJS.Signals): void => {
     interruptionRequested = true;
     interruptionSignal = signal;
+    cancellationToken.cancel();
   };
   process.on("SIGINT", onInterruptSignal);
   process.on("SIGTERM", onInterruptSignal);
@@ -433,7 +489,7 @@ export async function importFromPath(
   };
 
   const assertRunNotInterrupted = (): void => {
-    if (interruptionRequested) {
+    if (interruptionRequested || cancellationToken.isCancelled) {
       throw new ImportInterruptedError("signal", interruptionSignal);
     }
     if (
@@ -492,17 +548,20 @@ export async function importFromPath(
       );
 
       let activeConversationIndex = -1;
-      const result = await resolvedDeps.importer(
-        plan.selectedWithOffsets.map((item) => item.conversation),
-        options.project,
-        options.dryRun,
-        {
-          delayMs: options.delayMs,
-          verbose: false,
-          showConversationProgress: false,
-          importPolicy: options.importPolicy,
-          callbacks: {
+      const result = await withRuntimeEnv(options.runtimeEnv, async () =>
+        resolvedDeps.importer(
+          plan.selectedWithOffsets.map((item) => item.conversation),
+          options.project,
+          options.dryRun,
+          {
+            delayMs: options.delayMs,
+            verbose: false,
+            showConversationProgress: false,
+            importPolicy: options.importPolicy,
+            cancellationToken,
+            callbacks: {
             onConversationStart: (context) => {
+              void notifyImportStarted();
               assertRunNotInterrupted();
               activeConversationIndex = context.conversation_index - 1;
               progressState.currentConversationStartedAtMs = Date.now();
@@ -710,9 +769,9 @@ export async function importFromPath(
               completedMessageOutcomes += 1;
               assertRunNotInterrupted();
             },
-          },
-        }
-      );
+            },
+          }
+        ));
 
       summary.importedConversations += result.totalConversations;
       summary.savedMemories += result.saved;
@@ -852,6 +911,19 @@ function buildScanSummaryTable(report: IScanReport): string[] {
   }
   lines.push(top);
   return lines;
+}
+
+function parseEmbeddingDimension(
+  value: string | undefined
+): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (Number.isNaN(parsed)) {
+    return undefined;
+  }
+  return parsed;
 }
 
 function progressBar(current: number, total: number, width = 24): string {

@@ -1,4 +1,5 @@
 import { IImporterGateway } from "../importer-gateway";
+import { ImportInterruptedError } from "./cancellation";
 import { evaluateMessageForImport } from "./message-classifier";
 import {
   IImportPolicy,
@@ -23,11 +24,17 @@ export async function importConversations(
   const importPolicy = options.import_policy ?? "skip_existing";
   const conversationDelayMs = options.conversation_delay_ms ?? 0;
   const callbacks = options.callbacks;
+  const cancellationToken = options.cancellation_token;
   let saved = 0;
   let skipped = 0;
   const skippedReasons: Record<string, number> = {};
 
+  const assertNotCancelled = (): void => {
+    cancellationToken?.throwIfCancelled();
+  };
+
   for (let conversationIndex = 0; conversationIndex < conversations.length; conversationIndex += 1) {
+    assertNotCancelled();
     const conversation = conversations[conversationIndex];
     let conversationSaved = 0;
     let conversationSkipped = 0;
@@ -39,6 +46,7 @@ export async function importConversations(
     });
 
     for (let messageIndex = 0; messageIndex < conversation.messages.length; messageIndex += 1) {
+      assertNotCancelled();
       const message = conversation.messages[messageIndex];
       const absoluteMessageIndex = (conversation.message_offset ?? 0) + messageIndex;
       callbacks?.onMessageStart?.({
@@ -91,6 +99,7 @@ export async function importConversations(
         evaluation.payload,
         importPolicy
       );
+      assertNotCancelled();
       if (!policyDecision.should_import) {
         callbacks?.onMessageStageChange?.({
           conversation_title: conversation.title,
@@ -139,6 +148,7 @@ export async function importConversations(
       }
 
       try {
+        assertNotCancelled();
         callbacks?.onMessageStageChange?.({
           conversation_title: conversation.title,
           role: message.role,
@@ -157,6 +167,7 @@ export async function importConversations(
           ref_id: evaluation.payload.ref_id,
         });
         await gateway.saveMemory(evaluation.payload);
+        assertNotCancelled();
         callbacks?.onMessageStageChange?.({
           conversation_title: conversation.title,
           role: message.role,
@@ -176,6 +187,9 @@ export async function importConversations(
           preview: buildPreview(message.content),
         });
       } catch (error) {
+        if (error instanceof ImportInterruptedError) {
+          throw error;
+        }
         callbacks?.onMessageStageChange?.({
           conversation_title: conversation.title,
           role: message.role,
@@ -211,6 +225,7 @@ export async function importConversations(
     });
 
     if (conversationDelayMs > 0 && conversationIndex < conversations.length - 1) {
+      assertNotCancelled();
       await sleep(conversationDelayMs);
     }
   }

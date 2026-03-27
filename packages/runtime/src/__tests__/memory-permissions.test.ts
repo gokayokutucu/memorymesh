@@ -42,7 +42,10 @@ jest.mock("../graph-store", () => ({
 }));
 
 describe("memory permissions", () => {
+  let consoleErrorSpy: jest.SpyInstance;
+
   beforeEach(() => {
+    consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     jest.resetModules();
     mockEmbed.mockReset().mockResolvedValue(new Array(3).fill(0.1));
     mockEnsureCollection.mockReset().mockResolvedValue(undefined);
@@ -54,6 +57,10 @@ describe("memory permissions", () => {
     });
     delete process.env.MEMORYMESH_MEMORY_READ_ENABLED;
     delete process.env.MEMORYMESH_MEMORY_WRITE_ENABLED;
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
   });
 
   it("WRITE=false disables saveMemory with deterministic skipped response", async () => {

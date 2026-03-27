@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { IGptConversation, IImportPolicy } from "@memorymesh/core";
+import { resolveUserHomeDir } from "./system/runtime-home";
 
 const CHECKPOINT_VERSION = 1;
 
@@ -12,6 +12,10 @@ export interface ICheckpointContext {
   engine: "ts" | "rust";
   import_policy: IImportPolicy;
   execution_mode: "dry_run" | "real";
+  import_kind: "gpt" | "document";
+  embedding_mode?: string;
+  embedding_model?: string;
+  embedding_dimension?: number;
 }
 
 interface ICheckpointConversationState {
@@ -54,7 +58,8 @@ export class ImportCheckpoint {
     this.datasetKey = buildDatasetKey(context);
     this.filePath = resolveCheckpointFilePath(
       this.datasetKey,
-      context.execution_mode
+      context.execution_mode,
+      context.import_kind
     );
     this.data = createEmptyCheckpoint(context, this.datasetKey);
 
@@ -138,13 +143,15 @@ export function buildConversationCheckpointKey(
 
 export function resolveCheckpointFilePath(
   datasetKey: string,
-  mode: ICheckpointContext["execution_mode"]
+  mode: ICheckpointContext["execution_mode"],
+  importKind: ICheckpointContext["import_kind"]
 ): string {
   const directory = resolve(
     process.env.MEMORYMESH_CHECKPOINT_DIR ??
-      join(homedir(), ".memorymesh", "checkpoints")
+      join(resolveUserHomeDir(process.platform, process.env), ".memorymesh", "checkpoints")
   );
-  return join(directory, `gpt-import-${mode.replace("_", "-")}-${datasetKey}.json`);
+  const prefix = importKind === "document" ? "document-import" : "gpt-import";
+  return join(directory, `${prefix}-${mode.replace("_", "-")}-${datasetKey}.json`);
 }
 
 function buildDatasetKey(context: ICheckpointContext): string {
@@ -156,6 +163,10 @@ function buildDatasetKey(context: ICheckpointContext): string {
     engine: context.engine,
     policy: context.import_policy,
     mode: context.execution_mode,
+    import_kind: context.import_kind,
+    embedding_mode: normalizeOptionalText(context.embedding_mode),
+    embedding_model: normalizeOptionalText(context.embedding_model),
+    embedding_dimension: normalizeOptionalNumber(context.embedding_dimension),
   });
   return createHash("sha256").update(payload).digest("hex").slice(0, 20);
 }
@@ -237,6 +248,21 @@ function hasAnyProgress(data: ICheckpointData): boolean {
 
 function normalizeText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeOptionalText(value: string | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? normalizeText(trimmed) : null;
+}
+
+function normalizeOptionalNumber(value: number | undefined): number | null {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return null;
+  }
+  return value;
 }
 
 function hashShort(value: string): string {

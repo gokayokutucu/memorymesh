@@ -1,4 +1,5 @@
 import {
+  ICancellationToken,
   classifyMessage as classifyMessageShared,
   IImportCallbacks,
   IImportPolicy,
@@ -11,7 +12,10 @@ import {
   importConversations as runImportConversations,
   ISaveMemoryInput,
 } from "@memorymesh/core";
-import { createRuntimeImporterGateway, ensureEmbeddingModelAvailable } from "@memorymesh/runtime";
+import {
+  createRuntimeImporterGateway,
+  ensureEmbeddingModelAvailable,
+} from "@memorymesh/runtime";
 
 interface IMcpToolResponse {
   result?: {
@@ -28,6 +32,7 @@ export interface IImportRunOptions {
   gateway?: IImporterGateway;
   callbacks?: Partial<IImportCallbacks>;
   showConversationProgress?: boolean;
+  cancellationToken?: ICancellationToken;
 }
 
 export interface IImportRunResult {
@@ -146,7 +151,7 @@ export async function importConversations(
     options.gateway ??
     (IMPORT_GATEWAY_MODE === "remote"
       ? createMcpImporterGateway()
-      : createRuntimeImporterGateway());
+      : createRuntimeImporterGateway(options.cancellationToken));
 
   const usesLocalRuntimeGateway = !options.gateway && IMPORT_GATEWAY_MODE !== "remote";
   if (!dryRun && usesLocalRuntimeGateway) {
@@ -230,17 +235,25 @@ export async function importConversations(
     },
   };
 
-  const result: IImportResult = await runImportConversations(
-    conversations,
-    project,
-    dryRun,
-    gateway,
-    {
-      import_policy: importPolicy,
-      conversation_delay_ms: delayMs,
-      callbacks,
+  let result: IImportResult;
+  try {
+    result = await runImportConversations(
+      conversations,
+      project,
+      dryRun,
+      gateway,
+      {
+        import_policy: importPolicy,
+        conversation_delay_ms: delayMs,
+        callbacks,
+        cancellation_token: options.cancellationToken,
+      }
+    );
+  } finally {
+    if (!dryRun && usesLocalRuntimeGateway) {
+      await waitForRuntimeBackgroundSaveTasks();
     }
-  );
+  }
 
   return {
     totalConversations: result.total_conversations,
@@ -248,6 +261,15 @@ export async function importConversations(
     skipped: result.skipped,
     skippedReasons: result.skipped_reasons,
   };
+}
+
+async function waitForRuntimeBackgroundSaveTasks(): Promise<void> {
+  const runtime = (await import("@memorymesh/runtime")) as {
+    waitForBackgroundSaveTasks?: () => Promise<void>;
+  };
+  if (typeof runtime.waitForBackgroundSaveTasks === "function") {
+    await runtime.waitForBackgroundSaveTasks();
+  }
 }
 
 function truncateTitle(value: string, maxLength: number): string {

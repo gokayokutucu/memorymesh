@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { ImportInterruptedError } from "@memorymesh/core";
 import { importFromPath } from "../folder-import";
 import { IRustEngineOutput } from "../rust-engine";
 import { IScanReport } from "../folder-scan";
@@ -205,6 +206,296 @@ describe("folder-import", () => {
     expect(summary.savedMemories).toBe(1);
     expect(summary.categories.unsupported_conversation_schema).toBe(1);
     expect(summary.categories.ignorable_json).toBe(1);
+  });
+
+  it("applies authoritative runtime env to ts import and restores after success", async () => {
+    writeFileSync(
+      join(root, "supported.json"),
+      JSON.stringify([{ mapping: { a: {} }, current_node: "a" }]),
+      "utf-8"
+    );
+    process.env.EMBEDDING_MODEL = "nomic-embed-text";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "flash";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "768";
+
+    const parse = jest.fn(() => [
+      { title: "c1", messages: [{ role: "assistant", content: "x" }] },
+    ]);
+    const importer = jest.fn(async () => {
+      expect(process.env.EMBEDDING_MODEL).toBe("mxbai-embed-large");
+      expect(process.env.MEMORYMESH_EMBEDDING_MODE).toBe("medium");
+      expect(process.env.MEMORYMESH_EMBEDDING_DIMENSION).toBe("1024");
+      return {
+        totalConversations: 1,
+        saved: 1,
+        skipped: 0,
+        skippedReasons: {},
+      };
+    });
+
+    await importFromPath(
+      root,
+      {
+        project: "MemoryMesh",
+        dryRun: false,
+        delayMs: 0,
+        runtimeEnv: {
+          EMBEDDING_MODEL: "mxbai-embed-large",
+          MEMORYMESH_EMBEDDING_MODE: "medium",
+          MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+        },
+      },
+      { parse, importer }
+    );
+
+    expect(process.env.EMBEDDING_MODEL).toBe("nomic-embed-text");
+    expect(process.env.MEMORYMESH_EMBEDDING_MODE).toBe("flash");
+    expect(process.env.MEMORYMESH_EMBEDDING_DIMENSION).toBe("768");
+  });
+
+  it("restores previous env after ts import failure", async () => {
+    writeFileSync(
+      join(root, "supported.json"),
+      JSON.stringify([{ mapping: { a: {} }, current_node: "a" }]),
+      "utf-8"
+    );
+    process.env.EMBEDDING_MODEL = "nomic-embed-text";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "flash";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "768";
+
+    const parse = jest.fn(() => [
+      { title: "c1", messages: [{ role: "assistant", content: "x" }] },
+    ]);
+    const importer = jest.fn(async () => {
+      expect(process.env.EMBEDDING_MODEL).toBe("mxbai-embed-large");
+      expect(process.env.MEMORYMESH_EMBEDDING_MODE).toBe("medium");
+      expect(process.env.MEMORYMESH_EMBEDDING_DIMENSION).toBe("1024");
+      throw new Error("import failed");
+    });
+
+    await expect(
+      importFromPath(
+        root,
+        {
+          project: "MemoryMesh",
+          dryRun: false,
+          delayMs: 0,
+          runtimeEnv: {
+            EMBEDDING_MODEL: "mxbai-embed-large",
+            MEMORYMESH_EMBEDDING_MODE: "medium",
+            MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+          },
+        },
+        { parse, importer }
+      )
+    ).rejects.toThrow("import failed");
+
+    expect(process.env.EMBEDDING_MODEL).toBe("nomic-embed-text");
+    expect(process.env.MEMORYMESH_EMBEDDING_MODE).toBe("flash");
+    expect(process.env.MEMORYMESH_EMBEDDING_DIMENSION).toBe("768");
+  });
+
+  it("passes a cancellation token into ts importer and restores env after interruption", async () => {
+    writeFileSync(
+      join(root, "supported.json"),
+      JSON.stringify([{ mapping: { a: {} }, current_node: "a" }]),
+      "utf-8"
+    );
+    process.env.EMBEDDING_MODEL = "nomic-embed-text";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "flash";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "768";
+
+    const parse = jest.fn(() => [
+      { title: "c1", messages: [{ role: "assistant", content: "x" }] },
+    ]);
+    const importer = jest.fn(async (_conversations, _project, _dryRun, options) => {
+      expect(options?.cancellationToken?.isCancelled).toBe(false);
+      process.emit("SIGINT", "SIGINT");
+      expect(options?.cancellationToken?.isCancelled).toBe(true);
+      options?.cancellationToken?.throwIfCancelled();
+      return {
+        totalConversations: 1,
+        saved: 1,
+        skipped: 0,
+        skippedReasons: {},
+      };
+    });
+
+    await expect(
+      importFromPath(
+        root,
+        {
+          project: "MemoryMesh",
+          dryRun: false,
+          delayMs: 0,
+          runtimeEnv: {
+            EMBEDDING_MODEL: "mxbai-embed-large",
+            MEMORYMESH_EMBEDDING_MODE: "medium",
+            MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+          },
+        },
+        { parse, importer }
+      )
+    ).rejects.toBeInstanceOf(ImportInterruptedError);
+
+    expect(process.env.EMBEDDING_MODEL).toBe("nomic-embed-text");
+    expect(process.env.MEMORYMESH_EMBEDDING_MODE).toBe("flash");
+    expect(process.env.MEMORYMESH_EMBEDDING_DIMENSION).toBe("768");
+  });
+
+  it("passes authoritative runtime env into rust scan path", async () => {
+    process.env.EMBEDDING_MODEL = "nomic-embed-text";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "flash";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "768";
+
+    const parse = jest.fn(() => []);
+    const importer = jest.fn(async () => ({
+      totalConversations: 0,
+      saved: 0,
+      skipped: 0,
+      skippedReasons: {},
+    }));
+    const scanRust = jest.fn(async (_inputPath: string, _binaryPath?: string, env?: NodeJS.ProcessEnv) => {
+      expect(env?.EMBEDDING_MODEL).toBe("mxbai-embed-large");
+      expect(env?.MEMORYMESH_EMBEDDING_MODE).toBe("medium");
+      expect(env?.MEMORYMESH_EMBEDDING_DIMENSION).toBe("1024");
+      return {
+        scan_summary: {
+          scanned_json_files: 0,
+          supported_conversation_file: 0,
+          unsupported_conversation_schema: 0,
+          ignorable_json: 0,
+          unknown_json: 0,
+          invalid_json: 0,
+        },
+        files: [],
+      };
+    });
+
+    await importFromPath(
+      root,
+      {
+        project: "MemoryMesh",
+        dryRun: true,
+        delayMs: 0,
+        engine: "rust",
+        runtimeEnv: {
+          EMBEDDING_MODEL: "mxbai-embed-large",
+          MEMORYMESH_EMBEDDING_MODE: "medium",
+          MEMORYMESH_EMBEDDING_DIMENSION: "1024",
+        },
+      },
+      { parse, importer, scanRust }
+    );
+
+    expect(scanRust).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not trigger onImportStarted when no supported conversations are processed", async () => {
+    const onImportStarted = jest.fn();
+    const parse = jest.fn(() => []);
+    const importer = jest.fn(async () => ({
+      totalConversations: 0,
+      saved: 0,
+      skipped: 0,
+      skippedReasons: {},
+    }));
+
+    await importFromPath(
+      root,
+      {
+        project: "MemoryMesh",
+        dryRun: true,
+        delayMs: 0,
+        onImportStarted,
+      },
+      {
+        parse,
+        importer,
+        scanRust: async (): Promise<IRustEngineOutput> => ({
+          scan_summary: {
+            scanned_json_files: 0,
+            supported_conversation_file: 0,
+            unsupported_conversation_schema: 0,
+            ignorable_json: 0,
+            unknown_json: 0,
+            invalid_json: 0,
+          },
+          files: [],
+        }),
+      }
+    );
+
+    expect(onImportStarted).not.toHaveBeenCalled();
+  });
+
+  it("triggers onImportStarted exactly once when first conversation starts", async () => {
+    writeFileSync(
+      join(root, "supported.json"),
+      JSON.stringify([{ mapping: { a: {} }, current_node: "a" }]),
+      "utf-8"
+    );
+
+    const onImportStarted = jest.fn();
+    const parse = jest.fn(() => [
+      {
+        title: "Conv One",
+        source_conversation_id: "conv-1",
+        messages: [{ role: "assistant", content: "a" }],
+      },
+      {
+        title: "Conv Two",
+        source_conversation_id: "conv-2",
+        messages: [{ role: "assistant", content: "b" }],
+      },
+    ]);
+    const importer = jest.fn(async (_conversations, _project, _dryRun, options) => {
+      options?.callbacks?.onConversationStart?.({
+        conversation_index: 1,
+        total_conversations: 2,
+        title: "Conv One",
+        message_count: 1,
+      });
+      options?.callbacks?.onConversationComplete?.({
+        conversation_index: 1,
+        total_conversations: 2,
+        title: "Conv One",
+        saved: 1,
+        skipped: 0,
+      });
+      options?.callbacks?.onConversationStart?.({
+        conversation_index: 2,
+        total_conversations: 2,
+        title: "Conv Two",
+        message_count: 1,
+      });
+      options?.callbacks?.onConversationComplete?.({
+        conversation_index: 2,
+        total_conversations: 2,
+        title: "Conv Two",
+        saved: 1,
+        skipped: 0,
+      });
+      return {
+        totalConversations: 2,
+        saved: 2,
+        skipped: 0,
+        skippedReasons: {},
+      };
+    });
+
+    await importFromPath(
+      root,
+      {
+        project: "MemoryMesh",
+        dryRun: false,
+        delayMs: 0,
+        onImportStarted,
+      },
+      { parse, importer }
+    );
+
+    expect(onImportStarted).toHaveBeenCalledTimes(1);
   });
 
   it("creates checkpoint file and advances after safe message processing", async () => {

@@ -1,16 +1,27 @@
-import { createMemoryService, IMemoryGateway } from "@memorymesh/core";
+import {
+  createMemoryService,
+  ICancellationToken,
+  IMemoryGateway,
+  ImportInterruptedError,
+} from "@memorymesh/core";
 import { randomUUID } from "node:crypto";
 import {
   getMemoryPermissionConfig,
   getProfilerConfig,
   getSavePayloadConfig,
 } from "./config";
-import { getDocuments } from "./document-store";
-import { getRelated } from "./graph-store";
+import { deleteDocuments, getDocuments } from "./document-store";
+import { deleteNodes, getRelated } from "./graph-store";
 import { embed } from "./embeddings";
 import { buildPreview, orchestrateSave, orchestrateSearch } from "./orchestrator";
 import { Profiler } from "./profiler";
-import { ensureCollection, getPointsByIds, listProjects, searchPoints } from "./storage";
+import {
+  deletePointsByIds,
+  ensureCollection,
+  getPointsByIds,
+  listProjects,
+  searchPoints,
+} from "./storage";
 import {
   IGetRelatedMemoriesInput,
   IGetMemoryByRefInput,
@@ -23,6 +34,7 @@ import {
 } from "./types";
 
 const saveStatusRegistry = new Map<string, ISaveMemoryStatus>();
+const activeBackgroundSaveTasks = new Set<Promise<void>>();
 const permissionLogState = {
   readDisabledLogged: false,
   writeDisabledLogged: false,
@@ -44,12 +56,38 @@ export function saveMemory(input: ISaveMemoryInput): ISaveMemoryResult {
   return memoryService.saveMemory(input);
 }
 
-export function saveMemoryForImport(input: ISaveMemoryInput): ISaveMemoryResult {
-  return saveMemoryInternal(input, { bypassWritePermission: true });
+export function saveMemoryForImport(
+  input: ISaveMemoryInput,
+  options?: { cancellationToken?: ICancellationToken }
+): ISaveMemoryResult {
+  return saveMemoryInternal(input, {
+    bypassWritePermission: true,
+    cancellationToken: options?.cancellationToken,
+  });
 }
 
 export function getMemoryStatus(id: string): ISaveMemoryStatus | null {
   return memoryService.getMemoryStatus(id) as ISaveMemoryStatus | null;
+}
+
+export async function waitForBackgroundSaveTasks(): Promise<void> {
+  const tasks = Array.from(activeBackgroundSaveTasks);
+  if (tasks.length === 0) {
+    return;
+  }
+  await Promise.allSettled(tasks);
+}
+
+export async function deleteMemoriesByIds(ids: string[]): Promise<void> {
+  if (ids.length === 0) {
+    return;
+  }
+  await ensureCollection();
+  await deletePointsByIds(ids);
+  await Promise.all([
+    deleteDocuments(ids),
+    deleteNodes(ids),
+  ]);
 }
 
 export async function searchMemory(
@@ -80,9 +118,10 @@ export async function getRelatedMemories(
 
 function saveMemoryInternal(
   input: ISaveMemoryInput,
-  options?: { bypassWritePermission?: boolean }
+  options?: { bypassWritePermission?: boolean; cancellationToken?: ICancellationToken }
 ): ISaveMemoryResult {
   const id = randomUUID();
+  options?.cancellationToken?.throwIfCancelled();
   if (
     !options?.bypassWritePermission &&
     !getMemoryPermissionConfig().writeEnabled
@@ -144,10 +183,13 @@ function saveMemoryInternal(
     neo4j_saved: false,
   });
 
-  (async () => {
+  const backgroundTask = (async () => {
     try {
+      options?.cancellationToken?.throwIfCancelled();
       await ensureCollection();
+      options?.cancellationToken?.throwIfCancelled();
       const vector = await profiler.time("embed", async () => embed(input.content));
+      options?.cancellationToken?.throwIfCancelled();
       const orchestration = await orchestrateSave(input, vector, profiler, id);
       const status = resolveSaveStatus(input, orchestration);
       setSaveStatus(id, {
@@ -159,6 +201,21 @@ function saveMemoryInternal(
       });
       logProfilerSummary(profiler);
     } catch (error) {
+      if (error instanceof ImportInterruptedError) {
+        setSaveStatus(id, {
+          id,
+          status: "failed",
+          error_code: "import_interrupted",
+          error_message: "import_interrupted",
+          qdrant_saved: false,
+          mongo_saved: false,
+          neo4j_saved: false,
+          payload_bytes: payloadBytes,
+          max_payload_bytes: maxPayloadBytes,
+          error: error.message,
+        });
+        return;
+      }
       const errorCode = getKnownErrorCode(error);
       setSaveStatus(id, {
         id,
@@ -175,8 +232,16 @@ function saveMemoryInternal(
       console.error("[memorymesh] background save failed:", error);
     }
   })();
+  trackBackgroundSaveTask(backgroundTask);
 
   return { id, status: "pending" };
+}
+
+function trackBackgroundSaveTask(task: Promise<void>): void {
+  activeBackgroundSaveTasks.add(task);
+  task.finally(() => {
+    activeBackgroundSaveTasks.delete(task);
+  });
 }
 
 function getMemoryStatusInternal(id: string): ISaveMemoryStatus | null {
@@ -339,6 +404,7 @@ function getKnownErrorCode(
   ) {
     const code = (error as { code: string }).code;
     if (
+      code === "import_interrupted" ||
       code === "embedding_input_too_large" ||
       code === "qdrant_transient_failure" ||
       code === "mongo_transient_failure" ||

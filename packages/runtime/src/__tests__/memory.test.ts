@@ -4,9 +4,12 @@ import {
   getMemoryByRef,
   getRelatedMemories,
   saveMemory,
+  saveMemoryForImport,
+  waitForBackgroundSaveTasks,
   searchMemory,
   getProjects,
 } from "../memory";
+import { CancellationToken } from "@memorymesh/core";
 import * as embeddings from "../embeddings";
 import * as storage from "../storage";
 import * as graphStore from "../graph-store";
@@ -189,6 +192,82 @@ describe("saveMemory", () => {
     expect(status?.qdrant_saved).toBe(true);
     expect(status?.mongo_saved).toBe(true);
     expect(status?.neo4j_saved).toBe(true);
+  });
+});
+
+describe("saveMemoryForImport cancellation", () => {
+  it("does not start background work when token is already cancelled", () => {
+    const token = new CancellationToken();
+    token.cancel();
+
+    expect(() =>
+      saveMemoryForImport(
+        {
+          content: "cancelled import",
+          project: "MemoryMesh",
+          memory_type: "context",
+        },
+        { cancellationToken: token }
+      )
+    ).toThrow("Import interrupted by signal");
+
+    expect(mockEnsure).not.toHaveBeenCalled();
+    expect(mockEmbed).not.toHaveBeenCalled();
+    expect(mockSave).not.toHaveBeenCalled();
+  });
+
+  it("stops before embedding when cancellation is raised after collection check", async () => {
+    const token = new CancellationToken();
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    mockEnsure.mockImplementation(async () => {
+      token.cancel();
+    });
+
+    const result = saveMemoryForImport(
+      {
+        content: "cancel during import",
+        project: "MemoryMesh",
+        memory_type: "context",
+      },
+      { cancellationToken: token }
+    );
+
+    await waitForCondition(() => getMemoryStatus(result.id)?.status !== "pending");
+    expect(getMemoryStatus(result.id)?.error_code).toBe("import_interrupted");
+    expect(mockEmbed).not.toHaveBeenCalled();
+    expect(mockSave).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("waitForBackgroundSaveTasks waits until active background saves settle", async () => {
+    let releaseSave: (() => void) | undefined;
+    mockSave.mockImplementation(
+      async () =>
+        new Promise<string>((resolve) => {
+          releaseSave = () => resolve("id-delayed");
+        })
+    );
+
+    const result = saveMemoryForImport({
+      content: "delayed save",
+      project: "MemoryMesh",
+      memory_type: "context",
+    });
+
+    await waitForCondition(() => mockSave.mock.calls.length === 1);
+    expect(getMemoryStatus(result.id)?.status).toBe("pending");
+
+    const waitPromise = waitForBackgroundSaveTasks();
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(getMemoryStatus(result.id)?.status).toBe("pending");
+
+    if (releaseSave) {
+      releaseSave();
+    }
+    await waitPromise;
+    await waitForCondition(() => getMemoryStatus(result.id)?.status !== "pending");
+    expect(getMemoryStatus(result.id)?.status).toBe("saved");
   });
 });
 

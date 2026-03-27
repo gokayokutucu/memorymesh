@@ -41,6 +41,7 @@ export async function orchestrateSave(
     title: input.title,
     ref_id: input.ref_id,
     source_type: input.source_type,
+    source_metadata: input.source_metadata,
   };
 
   const saveQdrant = async (): Promise<string> => savePoint(vector, payload, id);
@@ -71,6 +72,7 @@ export async function orchestrateSave(
       title: input.title,
       ref_id: input.ref_id,
       source_type: input.source_type,
+      source_metadata: input.source_metadata,
       });
     result.mongo_saved = profiler
       ? await profiler.time("mongo_save", saveMongo)
@@ -93,7 +95,8 @@ export async function orchestrateSave(
         input.derived_from_memory_id,
         input.source_agent,
         input.source_format,
-        input.message_index
+        input.message_index,
+        input.source_metadata
       );
     result.neo4j_saved = profiler
       ? await profiler.time("neo4j_save", saveGraph)
@@ -152,6 +155,7 @@ export async function orchestrateSearch(
   const mergedResults = uniqueIds
     .map((id) => existingResultMap.get(id))
     .filter((result): result is ISearchResult => Boolean(result));
+  const filteredResults = applyMetadataFilters(mergedResults, input);
 
   const graphExpandedIds = new Set<string>([
     ...tagIds,
@@ -161,9 +165,9 @@ export async function orchestrateSearch(
   const sortedResults = profiler
     ? await profiler.time(
       "recency_sort",
-      async () => sortResults(mergedResults, input, graphExpandedIds)
+      async () => sortResults(filteredResults, input, graphExpandedIds)
     )
-    : sortResults(mergedResults, input, graphExpandedIds);
+    : sortResults(filteredResults, input, graphExpandedIds);
   const limitedResults = sortedResults.slice(0, limit);
   return applySearchOutputMode(limitedResults, profiler);
 }
@@ -382,4 +386,67 @@ function computeTagOverlapBoost(
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+function applyMetadataFilters(
+  results: ISearchResult[],
+  filters: ISearchMemoryInput
+): ISearchResult[] {
+  if (!hasMetadataFilters(filters)) {
+    return results;
+  }
+  return results.filter((result) => matchesMetadataFilters(result, filters));
+}
+
+function hasMetadataFilters(filters: ISearchMemoryInput): boolean {
+  return Boolean(
+    filters.project ||
+      filters.source_type ||
+      filters.filename ||
+      filters.source_path ||
+      filters.relative_path ||
+      filters.source_extension
+  );
+}
+
+function matchesMetadataFilters(
+  result: ISearchResult,
+  filters: ISearchMemoryInput
+): boolean {
+  if (filters.project && result.project !== filters.project) {
+    return false;
+  }
+  if (filters.source_type && result.source_type !== filters.source_type) {
+    return false;
+  }
+
+  const metadata = result.source_metadata;
+  if (filters.filename && metadata?.filename !== filters.filename) {
+    return false;
+  }
+  if (filters.source_path && metadata?.source_path !== filters.source_path) {
+    return false;
+  }
+  if (filters.relative_path && metadata?.relative_path !== filters.relative_path) {
+    return false;
+  }
+  if (filters.source_extension) {
+    const resultExt = normalizeSourceExtension(metadata?.source_extension);
+    const filterExt = normalizeSourceExtension(filters.source_extension);
+    if (!resultExt || resultExt !== filterExt) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeSourceExtension(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.startsWith(".") ? trimmed.slice(1).toLowerCase() : trimmed.toLowerCase();
 }

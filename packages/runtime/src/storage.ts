@@ -5,19 +5,17 @@ import {
   executeWithRetry,
   isTransientQdrantError,
 } from "./resilience";
+import { resolveEmbeddingConfig } from "./embedding-config";
 
-const QDRANT_HOST = process.env.QDRANT_HOST ?? "localhost";
-const QDRANT_PORT = parseInt(process.env.QDRANT_PORT ?? "6333");
-const COLLECTION = process.env.QDRANT_COLLECTION ?? "memories";
-const VECTOR_SIZE = 768; // nomic-embed-text dimension
-
-const client = new QdrantClient({ host: QDRANT_HOST, port: QDRANT_PORT });
-let collectionExistsCache = false;
+const collectionExistsCache = new Set<string>();
 
 export async function ensureCollection(): Promise<void> {
-  if (collectionExistsCache) {
+  const collectionConfig = resolveCollectionConfig();
+  const cacheKey = getCollectionCacheKey(collectionConfig);
+  if (collectionExistsCache.has(cacheKey)) {
     return;
   }
+  const client = createQdrantClient();
 
   const collections = await executeWithRetry(
     async () => client.getCollections(),
@@ -28,12 +26,15 @@ export async function ensureCollection(): Promise<void> {
       transientFailureCode: "qdrant_transient_failure",
     }
   );
-  const exists = collections.collections.some((c) => c.name === COLLECTION);
+  const exists = collections.collections.some((c) => c.name === collectionConfig.collection);
   if (!exists) {
     await executeWithRetry(
       async () =>
-        client.createCollection(COLLECTION, {
-          vectors: { size: VECTOR_SIZE, distance: "Cosine" },
+        client.createCollection(collectionConfig.collection, {
+          vectors: {
+            size: collectionConfig.embeddingDimension,
+            distance: "Cosine",
+          },
         }),
       {
         store: "qdrant",
@@ -43,7 +44,7 @@ export async function ensureCollection(): Promise<void> {
       }
     );
   }
-  collectionExistsCache = true;
+  collectionExistsCache.add(cacheKey);
 }
 
 export async function savePoint(
@@ -55,7 +56,7 @@ export async function savePoint(
   await executeQdrantOperation(
     "upsert",
     async () =>
-      client.upsert(COLLECTION, {
+      createQdrantClient().upsert(resolveCollectionConfig().collection, {
         wait: true,
         points: [{ id: pointId, vector, payload: payload as unknown as Record<string, unknown> }],
       })
@@ -83,6 +84,21 @@ export async function searchPoints(
   if (input.source_type) {
     must.push({ key: "source_type", match: { value: input.source_type } });
   }
+  if (input.filename) {
+    must.push({ key: "source_metadata.filename", match: { value: input.filename } });
+  }
+  if (input.source_path) {
+    must.push({ key: "source_metadata.source_path", match: { value: input.source_path } });
+  }
+  if (input.relative_path) {
+    must.push({ key: "source_metadata.relative_path", match: { value: input.relative_path } });
+  }
+  if (input.source_extension) {
+    must.push({
+      key: "source_metadata.source_extension",
+      match: { value: input.source_extension },
+    });
+  }
   if (input.before) {
     must.push({ key: "created_at", range: { lt: input.before } });
   }
@@ -96,7 +112,7 @@ export async function searchPoints(
     const exactResults = await executeQdrantOperation(
       "scroll",
       async () =>
-        client.scroll(COLLECTION, {
+        createQdrantClient().scroll(resolveCollectionConfig().collection, {
           limit,
           filter,
           with_payload: true,
@@ -125,6 +141,7 @@ export async function searchPoints(
         title: p.title,
         ref_id: p.ref_id,
         source_type: p.source_type,
+        source_metadata: p.source_metadata,
       };
     });
 
@@ -134,7 +151,7 @@ export async function searchPoints(
   const results = await executeQdrantOperation(
     "search",
     async () =>
-      client.search(COLLECTION, {
+      createQdrantClient().search(resolveCollectionConfig().collection, {
         vector,
         limit,
         filter,
@@ -163,6 +180,7 @@ export async function searchPoints(
       title: p.title,
       ref_id: p.ref_id,
       source_type: p.source_type,
+      source_metadata: p.source_metadata,
     };
   });
 
@@ -192,7 +210,7 @@ export async function listProjects(): Promise<
   const result = await executeQdrantOperation(
     "scrollProjects",
     async () =>
-      client.scroll(COLLECTION, {
+      createQdrantClient().scroll(resolveCollectionConfig().collection, {
         limit: 1000,
         with_payload: true,
       })
@@ -218,7 +236,7 @@ export async function getPointsByIds(ids: string[]): Promise<ISearchResult[]> {
   const points = await executeQdrantOperation(
     "retrieve",
     async () =>
-      client.retrieve(COLLECTION, {
+      createQdrantClient().retrieve(resolveCollectionConfig().collection, {
         ids,
         with_payload: true,
         with_vector: false,
@@ -246,8 +264,25 @@ export async function getPointsByIds(ids: string[]): Promise<ISearchResult[]> {
       title: payload.title,
       ref_id: payload.ref_id,
       source_type: payload.source_type,
+      source_metadata: payload.source_metadata,
     };
   });
+}
+
+export async function deletePointsByIds(ids: string[]): Promise<boolean> {
+  if (ids.length === 0) {
+    return true;
+  }
+
+  await executeQdrantOperation(
+    "delete",
+    async () =>
+      createQdrantClient().delete(resolveCollectionConfig().collection, {
+        wait: true,
+        points: ids,
+      })
+  );
+  return true;
 }
 
 async function executeQdrantOperation<T>(
@@ -266,7 +301,7 @@ async function executeQdrantOperation<T>(
       throw error;
     }
 
-    collectionExistsCache = false;
+    collectionExistsCache.clear();
     await ensureCollection();
     return executeWithRetry(fn, {
       store: "qdrant",
@@ -287,5 +322,51 @@ function isCollectionMissingError(error: unknown): boolean {
 }
 
 export function resetCollectionCacheForTests(): void {
-  collectionExistsCache = false;
+  collectionExistsCache.clear();
+}
+
+function createQdrantClient(): QdrantClient {
+  const config = resolveCollectionConfig();
+  return new QdrantClient({
+    host: config.host,
+    port: config.port,
+    checkCompatibility: config.checkCompatibility,
+  });
+}
+
+function resolveCollectionConfig(): {
+  host: string;
+  port: number;
+  collection: string;
+  checkCompatibility: boolean;
+  embeddingDimension: number;
+} {
+  const qdrantHost = process.env.QDRANT_HOST?.trim() || "localhost";
+  const qdrantPortRaw = process.env.QDRANT_PORT?.trim() || "6333";
+  const qdrantPort = Number.parseInt(qdrantPortRaw, 10);
+  if (!Number.isFinite(qdrantPort) || qdrantPort <= 0) {
+    throw new Error(`Invalid QDRANT_PORT: ${qdrantPortRaw}`);
+  }
+  const collection = process.env.QDRANT_COLLECTION?.trim() || "memories";
+  const checkCompatibility =
+    process.env.MEMORYMESH_QDRANT_CHECK_COMPATIBILITY === "false"
+      ? false
+      : process.env.NODE_ENV !== "test";
+  const embedding = resolveEmbeddingConfig();
+  return {
+    host: qdrantHost,
+    port: qdrantPort,
+    collection,
+    checkCompatibility,
+    embeddingDimension: embedding.embeddingDimension,
+  };
+}
+
+function getCollectionCacheKey(config: {
+  host: string;
+  port: number;
+  collection: string;
+  embeddingDimension: number;
+}): string {
+  return `${config.host}:${String(config.port)}:${config.collection}:${String(config.embeddingDimension)}`;
 }

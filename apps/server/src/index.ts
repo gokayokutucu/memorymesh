@@ -4,6 +4,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import * as net from "node:net";
 import type { Request, Response } from "express";
+import { registerHttpStatusRoutes } from "./http-status";
 import { z } from "zod";
 import * as dotenv from "dotenv";
 import {
@@ -473,9 +474,7 @@ async function main() {
     const port = await resolveHttpPort(BASE_HTTP_PORT, MAX_PORT_ATTEMPTS);
     const app = createMcpExpressApp();
 
-    app.get("/", (_req: Request, res: Response) => {
-      res.status(200).json({ name: "memorymesh", status: "ok", transport: "http", mcp_endpoint: "/mcp" });
-    });
+    registerHttpStatusRoutes(app);
 
     // Her request → yeni server + yeni transport instance (stateless)
     app.all("/mcp", async (req: Request, res: Response) => {

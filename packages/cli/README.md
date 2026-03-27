@@ -1,14 +1,40 @@
-# MemoryMesh CLI (`@memorymesh/cli`)
+# MemoryMesh CLI (`memorymesh`)
 
-MemoryMesh CLI imports supported GPT export conversations into MemoryMesh using the shared
-core importer pipeline. It supports file or folder input, dry-run validation, import pacing,
-engine selection (`ts` or `rust`), and import policy control.
+MemoryMesh CLI provides:
+
+- first-run interactive installer for local MemoryMesh runtime
+- managed Docker stack lifecycle (`start/stop/reset/uninstall`)
+- doctor diagnostics and safe repairs (`doctor --fix`)
+- Claude Desktop MCP integration
+- import tools (`import:gpt`)
 
 ## Usage
 
 ```bash
+npm install -g memorymesh
 memorymesh
 ```
+
+Release stack notes:
+
+- installer-managed compose lives at `~/.memorymesh/stack/docker-compose.yml`
+- default server image is `ghcr.io/memorymesh/server:latest`
+- override with `MEMORYMESH_SERVER_IMAGE=...` when running `memorymesh start` or setup
+
+## Embedding Configuration
+
+Authoritative embedding configuration lives in:
+
+- `~/.memorymesh/config.json`
+
+Generated execution artifact:
+
+- `~/.memorymesh/runtime.env` (derived from `config.json`, regenerated on drift)
+
+Supported user flow:
+
+- Re-run `memorymesh` setup to change embedding mode/model
+- Avoid manual embedding env overrides in normal usage
 
 Interactive defaults:
 
@@ -40,7 +66,7 @@ memorymesh import:gpt --file <file-or-folder> [options]
 Development script alias remains available:
 
 ```bash
-npm run -w @memorymesh/cli import:gpt -- --path <file-or-folder> [options]
+npm run -w memorymesh import:gpt -- --path <file-or-folder> [options]
 ```
 
 ## Output Behavior

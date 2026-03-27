@@ -1,5 +1,5 @@
 import neo4j, { Driver } from "neo4j-driver";
-import { MemoryType } from "./types";
+import { ISourceMetadata, MemoryType } from "./types";
 import {
   executeWithRetry,
   isTransientNeo4jError,
@@ -54,7 +54,8 @@ export async function saveNode(
   derivedFromMemoryId?: string,
   sourceAgent?: string,
   sourceFormat?: string,
-  messageIndex?: number
+  messageIndex?: number,
+  sourceMetadata?: ISourceMetadata
 ): Promise<boolean> {
   const activeDriver = await getDriver();
   if (!activeDriver) {
@@ -78,6 +79,12 @@ export async function saveNode(
           m.source_agent = $source_agent,
           m.source_format = $source_format,
           m.message_index = $message_index,
+          m.source_filename = $source_filename,
+          m.source_path = $source_path,
+          m.relative_path = $relative_path,
+          m.source_extension = $source_extension,
+          m.source_chunk_index = $source_chunk_index,
+          m.source_chunk_total = $source_chunk_total,
           m.parent_memory_id = $parent_memory_id,
           m.derived_from_memory_id = $derived_from_memory_id
       MERGE (p:Project {name: $project})
@@ -96,6 +103,12 @@ export async function saveNode(
             source_agent: sourceAgent ?? null,
             source_format: sourceFormat ?? null,
             message_index: messageIndex ?? null,
+            source_filename: sourceMetadata?.filename ?? null,
+            source_path: sourceMetadata?.source_path ?? null,
+            relative_path: sourceMetadata?.relative_path ?? null,
+            source_extension: sourceMetadata?.source_extension ?? null,
+            source_chunk_index: sourceMetadata?.chunk_index ?? null,
+            source_chunk_total: sourceMetadata?.chunk_total ?? null,
             parent_memory_id: parentMemoryId ?? null,
             derived_from_memory_id: derivedFromMemoryId ?? null,
           }
@@ -265,6 +278,44 @@ export async function getRelated(id: string): Promise<string[]> {
   } catch (error) {
     warnOnce(error);
     return [];
+  } finally {
+    await session.close();
+  }
+}
+
+export async function deleteNodes(ids: string[]): Promise<boolean> {
+  if (ids.length === 0) {
+    return true;
+  }
+
+  const activeDriver = await getDriver();
+  if (!activeDriver) {
+    return false;
+  }
+
+  const session = activeDriver.session();
+  try {
+    await executeWithRetry(
+      async () =>
+        session.run(
+          `
+      MATCH (m:Memory)
+      WHERE m.id IN $ids
+      DETACH DELETE m
+      `,
+          { ids }
+        ),
+      {
+        store: "neo4j",
+        operation: "deleteNodes",
+        isTransient: isTransientNeo4jError,
+        transientFailureCode: "neo4j_transient_failure",
+      }
+    );
+    return true;
+  } catch (error) {
+    warnOnce(error);
+    return false;
   } finally {
     await session.close();
   }
