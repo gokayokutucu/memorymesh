@@ -110,6 +110,7 @@ jobs:
   publish_npm:
     name: Publish npm package (memorymesh)
     runs-on: ubuntu-latest
+    environment: production
     needs: [validate_release, build_test]
     permissions:
       contents: read
@@ -142,6 +143,7 @@ jobs:
   publish_docker:
     name: Publish Docker image (GHCR)
     runs-on: ubuntu-latest
+    environment: production
     needs: [validate_release, build_test, publish_npm]
     permissions:
       contents: read

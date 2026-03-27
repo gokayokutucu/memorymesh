@@ -28,6 +28,8 @@ describe("graph-store query functions", () => {
   beforeEach(() => {
     jest.resetModules();
     jest.clearAllMocks();
+    process.env.NEO4J_USER = "neo4j";
+    process.env.NEO4J_PASSWORD = "secret";
     process.env.MEMORYMESH_RETRY_MAX_ATTEMPTS = "2";
     process.env.MEMORYMESH_RETRY_BASE_DELAY_MS = "0";
     process.env.MEMORYMESH_RETRY_MAX_DELAY_MS = "0";

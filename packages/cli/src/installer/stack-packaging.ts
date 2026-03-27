@@ -57,7 +57,11 @@ function createMemoryMeshServiceContent(options: IStackComposeOptions): string {
       - MONGO_HOST=mongodb
       - MONGO_PORT=27017
       - MONGO_DB=memorymesh
+      - MONGO_USER=\${MONGO_USER}
+      - MONGO_PASSWORD=\${MONGO_PASSWORD}
       - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=\${NEO4J_USER}
+      - NEO4J_PASSWORD=\${NEO4J_PASSWORD}
     restart: unless-stopped`;
   }
 
@@ -90,7 +94,11 @@ function createMemoryMeshServiceContent(options: IStackComposeOptions): string {
       - MONGO_HOST=mongodb
       - MONGO_PORT=27017
       - MONGO_DB=memorymesh
+      - MONGO_USER=\${MONGO_USER}
+      - MONGO_PASSWORD=\${MONGO_PASSWORD}
       - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=\${NEO4J_USER}
+      - NEO4J_PASSWORD=\${NEO4J_PASSWORD}
     restart: unless-stopped`;
 }
 
@@ -99,16 +107,16 @@ function createStackComposeContent(options: IStackComposeOptions): string {
   return `services:
   qdrant:
     image: qdrant/qdrant:latest
-    ports:
-      - "6333:6333"
+    expose:
+      - "6333"
     volumes:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped
 
   ollama:
     image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+    expose:
+      - "11434"
     volumes:
       - ollama_models:/root/.ollama
     restart: unless-stopped
@@ -134,21 +142,23 @@ function createStackComposeContent(options: IStackComposeOptions): string {
 
   mongodb:
     image: mongo:7
-    ports:
-      - "\${MONGO_PORT:-27017}:27017"
+    expose:
+      - "27017"
     environment:
       - MONGO_INITDB_DATABASE=memorymesh
+      - MONGO_INITDB_ROOT_USERNAME=\${MONGO_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=\${MONGO_PASSWORD}
     volumes:
       - mongodb_data:/data/db
     restart: unless-stopped
 
   neo4j:
     image: neo4j:5
-    ports:
-      - "\${NEO4J_HTTP_PORT:-7474}:7474"
-      - "\${NEO4J_BOLT_PORT:-7687}:7687"
+    expose:
+      - "7474"
+      - "7687"
     environment:
-      - NEO4J_AUTH=none
+      - NEO4J_AUTH=neo4j/\${NEO4J_PASSWORD}
     volumes:
       - neo4j_data:/data
     restart: unless-stopped

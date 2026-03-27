@@ -47,6 +47,15 @@ describe("stack packaging", () => {
     expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
       "EMBEDDING_MODEL=${EMBEDDING_MODEL}"
     );
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
+      "MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}"
+    );
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
+      "NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}"
+    );
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).not.toContain(
+      "NEO4J_AUTH=none"
+    );
     expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).not.toContain(
       "EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}"
     );

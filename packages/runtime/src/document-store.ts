@@ -7,8 +7,13 @@ import {
 const MONGO_HOST = process.env.MONGO_HOST ?? "localhost";
 const MONGO_PORT = process.env.MONGO_PORT ?? "27017";
 const MONGO_DB = process.env.MONGO_DB ?? "memorymesh";
+const MONGO_USER = process.env.MONGO_USER;
+const MONGO_PASSWORD = process.env.MONGO_PASSWORD;
 const COLLECTION = "documents";
-const URI = `mongodb://${MONGO_HOST}:${MONGO_PORT}`;
+const URI =
+  MONGO_USER && MONGO_PASSWORD
+    ? `mongodb://${encodeURIComponent(MONGO_USER)}:${encodeURIComponent(MONGO_PASSWORD)}@${MONGO_HOST}:${MONGO_PORT}/?authSource=admin`
+    : `mongodb://${MONGO_HOST}:${MONGO_PORT}`;
 
 interface IDocumentRecord {
   _id: string;

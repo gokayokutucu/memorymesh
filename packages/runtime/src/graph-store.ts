@@ -6,6 +6,8 @@ import {
 } from "./resilience";
 
 const NEO4J_URI = process.env.NEO4J_URI ?? "bolt://localhost:7687";
+const NEO4J_USER = process.env.NEO4J_USER;
+const NEO4J_PASSWORD = process.env.NEO4J_PASSWORD;
 
 let driver: Driver | null = null;
 let warned = false;
@@ -23,7 +25,10 @@ async function getDriver(): Promise<Driver | null> {
   }
 
   try {
-    driver = neo4j.driver(NEO4J_URI, neo4j.auth.basic("", ""));
+    if (!NEO4J_USER || !NEO4J_PASSWORD) {
+      throw new Error("NEO4J_USER and NEO4J_PASSWORD are required.");
+    }
+    driver = neo4j.driver(NEO4J_URI, neo4j.auth.basic(NEO4J_USER, NEO4J_PASSWORD));
     await executeWithRetry(
       async () => driver!.verifyConnectivity(),
       {
