@@ -216,9 +216,9 @@ Retrieval behavior is configurable via environment variables:
 MCP tool registration now follows memory mode at startup:
 - read enabled: `search_memory`, `get_memory`, `get_memory_by_ref`, `get_related_memories`, `list_projects`
 - write enabled: `save_memory`, `get_memory_status`
-- read-only mode hides write tools from MCP clients
+- search-only mode hides write tools from MCP clients
 - write-only mode hides read tools from MCP clients
-- isolated mode hides both tool groups
+- if both read and write are disabled, no memory read/write tools are exposed
 - `get_runtime_health` is always available for diagnostics
 
 Important:
