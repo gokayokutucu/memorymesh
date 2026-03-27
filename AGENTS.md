@@ -49,12 +49,13 @@ Formatting rules:
 
 ## 4) Testing Rules
 
-- Before starting any development work:
+- Before starting development work that changes code, workflows, or executable scripts:
   - Run `docker compose build` to ensure image is up to date
   - Run `npm test` to verify baseline is green
-- After each commit-worthy sub-step:
+- After each commit-worthy sub-step that changes code, workflows, or executable scripts:
   - Run `docker compose build`
   - Run `npm test`
+- Documentation-only changes do not require restarting the app or running the full build/test loop.
 - All new tools and functions MUST have unit tests.
 - Test file convention: `src/__tests__/<module>.test.ts`
 
@@ -134,13 +135,14 @@ STRICT GUARDS (must follow, otherwise STOP and report):
    - Commit message MUST match staged files' scope.
    - Do NOT mention modules/files not staged.
 
-3. Build gating — if `src/` is changed:
+3. Build gating — if code, workflow, or executable script paths are changed (for example `src/`, `apps/`, `packages/`, `.github/workflows/`, `*.sh`):
    ```bash
    docker compose build
    npm run build
    npm test
    ```
    Do NOT commit if build or tests fail.
+   Documentation-only changes (for example `README.md`, `AGENTS.md`, other docs) are exempt from this gate unless they accompany code changes.
 
 4. Push rule:
    - Normal commits: `git push`
