@@ -3,6 +3,14 @@ set -euo pipefail
 
 MODE="${1:-}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+VERSION_FILES=(
+  package.json
+  package-lock.json
+  apps/server/package.json
+  packages/core/package.json
+  packages/runtime/package.json
+  packages/cli/package.json
+)
 
 if [[ -z "$MODE" ]]; then
   echo "Usage: ./scripts/ship.sh [ci|release]"
@@ -42,6 +50,17 @@ if [[ "$MODE" == "release" ]]; then
   fi
 
   echo "🚀 Running RELEASE flow"
+  git fetch origin main --tags
+
+  if ! git merge-base --is-ancestor HEAD origin/main; then
+    echo "❌ Local main must be based on origin/main before release"
+    exit 1
+  fi
+
+  if ! git diff --quiet HEAD origin/main; then
+    echo "❌ Local main is not in sync with origin/main. Pull/rebase first."
+    exit 1
+  fi
 
   # bump all workspace versions
   npm version patch --workspaces
@@ -52,7 +71,17 @@ if [[ "$MODE" == "release" ]]; then
   echo "Version: $VERSION"
   echo "Tag: $TAG"
 
-  git add .
+  if git rev-parse --verify --quiet "$TAG" >/dev/null; then
+    echo "❌ Tag already exists locally: $TAG"
+    exit 1
+  fi
+
+  if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+    echo "❌ Tag already exists on origin: $TAG"
+    exit 1
+  fi
+
+  git add "${VERSION_FILES[@]}"
   git commit -m "chore(release): ${TAG}"
   git push
 

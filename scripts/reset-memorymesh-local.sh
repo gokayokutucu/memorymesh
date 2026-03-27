@@ -78,6 +78,12 @@ reset_qdrant_collection() {
 }
 
 require_command curl
+require_command docker
+
+container_is_running() {
+  local service_name="$1"
+  docker compose ps --services --status running 2>/dev/null | grep -Fx "${service_name}" >/dev/null 2>&1
+}
 
 printf 'WARNING: This will DELETE all local MemoryMesh data\n'
 printf 'Qdrant vectors, Mongo documents, Neo4j graph, checkpoints and audit logs will be removed.\n'
@@ -93,12 +99,20 @@ printf '\n[1/6] Resetting Qdrant collection: %s\n' "${QDRANT_COLLECTION}"
 reset_qdrant_collection
 
 printf '[2/6] Dropping MongoDB database: %s\n' "${MONGO_DB}"
-docker compose exec -T mongodb \
-  mongosh --quiet --eval "db.getSiblingDB('${MONGO_DB}').dropDatabase()" >/dev/null || true
+if container_is_running mongodb; then
+  docker compose exec -T mongodb \
+    mongosh --quiet --eval "db.getSiblingDB('${MONGO_DB}').dropDatabase()" >/dev/null
+else
+  printf 'WARN: mongodb container is not running; skipping database drop.\n'
+fi
 
 printf '[3/6] Clearing Neo4j graph\n'
-docker compose exec -T neo4j \
-  cypher-shell -u "${NEO4J_USER}" -p "${NEO4J_PASSWORD}" "MATCH (n) DETACH DELETE n" >/dev/null || true
+if container_is_running neo4j; then
+  docker compose exec -T neo4j \
+    cypher-shell -u "${NEO4J_USER}" -p "${NEO4J_PASSWORD}" "MATCH (n) DETACH DELETE n" >/dev/null
+else
+  printf 'WARN: neo4j container is not running; skipping graph cleanup.\n'
+fi
 
 printf '[4/6] Removing importer checkpoint and audit state\n'
 mkdir -p "${CHECKPOINT_DIR}" "${AUDIT_DIR}"

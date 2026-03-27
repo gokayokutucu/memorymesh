@@ -1,10 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 # Ensure minimal PATH for system utilities
 if [ -z "${PATH:-}" ]; then
   export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 fi
-
-#!/usr/bin/env bash
-set -euo pipefail
 
 echo "MemoryMesh installer (shell)"
 
@@ -122,7 +122,7 @@ if ! command_exists npm; then
 fi
 
 echo "Installing/updating MemoryMesh CLI globally..."
-npm install -g memorymesh
+npm install -g @okutucu/memorymesh
 
 if ! command -v memorymesh >/dev/null 2>&1; then
   echo "memorymesh command not found after install"
