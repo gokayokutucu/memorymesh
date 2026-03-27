@@ -725,16 +725,31 @@ describe("setup wizard", () => {
     expect(flash?.label).toContain("Will require reset");
   });
 
-  it("renders recommendation and reset labels in reuse-existing flow from local-build env authority before probe", async () => {
+  it("renders recommendation and reset labels in local-build reuse flow from persisted install config without embedding env injection", async () => {
     const fs: IFileSystem = {
       exists: (path: string) =>
         path.endsWith("apps/server/Dockerfile")
         || path.endsWith("package.json")
         || path.endsWith(".memorymesh")
         || path.endsWith("stack/docker-compose.yml")
-        || path === "/tmp/workspace/docker-compose.yml",
+        || path === "/tmp/workspace/docker-compose.yml"
+        || path.endsWith(".memorymesh/config.json"),
       mkdir: async () => {},
-      read: async () => "{}",
+      read: async (path: string) => {
+        if (path.endsWith(".memorymesh/config.json")) {
+          return JSON.stringify({
+            installState: "installed",
+            embeddingMode: "flash",
+            embeddingModel: "nomic-embed-text",
+            embeddingDimension: 768,
+            installedAt: "2026-03-28T00:00:00.000Z",
+            stackProjectDir: "/tmp/workspace",
+            composeFilePath: "/tmp/workspace/docker-compose.yml",
+            stackMode: "local-dev-build",
+          });
+        }
+        return "{}";
+      },
       write: async () => {},
     };
     const map = createBaseRunnerMap();
@@ -750,9 +765,6 @@ describe("setup wizard", () => {
       cwd: "/tmp/workspace",
       env: {
         MEMORYMESH_USE_LOCAL_BUILD: "true",
-        MEMORYMESH_EMBEDDING_MODE: "flash",
-        EMBEDDING_MODEL: "nomic-embed-text",
-        MEMORYMESH_EMBEDDING_DIMENSION: "768",
       },
       homeDir: "/tmp/home",
       platform: "darwin",

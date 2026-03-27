@@ -133,24 +133,16 @@ async function resolveExistingEmbeddingDimension(
   runner: ICommandRunner,
   fs: IFileSystem,
   homeDir: string,
-  env: NodeJS.ProcessEnv,
-  stackMode: "release-image" | "local-dev-build"
+  env: NodeJS.ProcessEnv
 ): Promise<number | null> {
-  const runtimeEnv = await readInstallerRuntimeEnv(homeDir, fs);
   const installConfig = await readInstallConfig(homeDir, fs);
+  const runtimeEnv = await readInstallerRuntimeEnv(homeDir, fs);
   const collectionName = env.QDRANT_COLLECTION?.trim() || "memories";
 
-  const preferredSources = stackMode === "local-dev-build"
-    ? [
-        resolveEmbeddingDimensionFromEnv(env),
-        resolveEmbeddingDimensionFromEnv(runtimeEnv),
-        installConfig?.embeddingDimension ?? null,
-      ]
-    : [
-        resolveEmbeddingDimensionFromEnv(runtimeEnv),
-        installConfig?.embeddingDimension ?? null,
-        resolveEmbeddingDimensionFromEnv(env),
-      ];
+  const preferredSources = [
+    installConfig?.embeddingDimension ?? null,
+    resolveEmbeddingDimensionFromEnv(runtimeEnv),
+  ];
 
   for (const candidate of preferredSources) {
     if (candidate === 768 || candidate === 1024) {
@@ -359,8 +351,7 @@ export async function runSetupWizard(
         resolved.runner,
         resolved.fs,
         resolved.homeDir,
-        resolved.env,
-        stackMode
+        resolved.env
       );
     }
 
