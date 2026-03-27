@@ -10,6 +10,7 @@ import {
 } from "./embedding-mismatch-flow";
 import {
   mapEmbeddingModeToDimension,
+  mapEmbeddingModelToDimension,
   mapEmbeddingModeToModel,
   readInstallerRuntimeEnv,
   writeInstallerRuntimeEnv,
@@ -102,6 +103,62 @@ function resolveEmbeddingMode(
   }
 
   return "medium";
+}
+
+function resolveEmbeddingDimensionFromEnv(env: NodeJS.ProcessEnv): number | null {
+  const mode = env.MEMORYMESH_EMBEDDING_MODE?.trim();
+  if (mode === "flash" || mode === "medium") {
+    return mapEmbeddingModeToDimension(mode);
+  }
+
+  const model = env.EMBEDDING_MODEL?.trim();
+  if (typeof model === "string" && model.length > 0) {
+    return mapEmbeddingModelToDimension(model);
+  }
+
+  const dimensionRaw = env.MEMORYMESH_EMBEDDING_DIMENSION?.trim();
+  if (!dimensionRaw) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(dimensionRaw, 10);
+  if (parsed === 768 || parsed === 1024) {
+    return parsed;
+  }
+
+  return null;
+}
+
+async function resolveExistingEmbeddingDimension(
+  runner: ICommandRunner,
+  fs: IFileSystem,
+  homeDir: string,
+  env: NodeJS.ProcessEnv,
+  stackMode: "release-image" | "local-dev-build"
+): Promise<number | null> {
+  const runtimeEnv = await readInstallerRuntimeEnv(homeDir, fs);
+  const installConfig = await readInstallConfig(homeDir, fs);
+  const collectionName = env.QDRANT_COLLECTION?.trim() || "memories";
+
+  const preferredSources = stackMode === "local-dev-build"
+    ? [
+        resolveEmbeddingDimensionFromEnv(env),
+        resolveEmbeddingDimensionFromEnv(runtimeEnv),
+        installConfig?.embeddingDimension ?? null,
+      ]
+    : [
+        resolveEmbeddingDimensionFromEnv(runtimeEnv),
+        installConfig?.embeddingDimension ?? null,
+        resolveEmbeddingDimensionFromEnv(env),
+      ];
+
+  for (const candidate of preferredSources) {
+    if (candidate === 768 || candidate === 1024) {
+      return candidate;
+    }
+  }
+
+  return detectQdrantCollectionDimension(runner, collectionName);
 }
 
 function resolveRequiredServiceAuthEnv(
@@ -298,13 +355,13 @@ export async function runSetupWizard(
 
     let existingDimension: number | null = null;
     if (!forceFreshEmbeddingSelection) {
-      const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
-      const detectedDimension = await detectQdrantCollectionDimension(
+      existingDimension = await resolveExistingEmbeddingDimension(
         resolved.runner,
-        collectionName
+        resolved.fs,
+        resolved.homeDir,
+        resolved.env,
+        stackMode
       );
-      const persistedConfig = await readInstallConfig(resolved.homeDir, resolved.fs);
-      existingDimension = detectedDimension ?? persistedConfig?.embeddingDimension ?? null;
     }
 
     let selectedModel = await resolved.ui.selectEmbeddingModel({

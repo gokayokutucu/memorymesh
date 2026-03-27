@@ -1,8 +1,17 @@
+const setupWizardSelectMock = jest.fn();
+const setupWizardIsCancelMock = jest.fn((_arg: unknown) => false);
+
+jest.mock("@clack/prompts", () => ({
+  select: (arg: unknown) => setupWizardSelectMock(arg),
+  isCancel: (arg: unknown) => setupWizardIsCancelMock(arg),
+}));
+
 import { runSetupWizard } from "../installer/setup-wizard";
 import { IFileSystem } from "../system/filesystem";
 import { ICommandRunner } from "../system/command-runner";
 import { IInstallerUi, ISpinner, ISpinnerFactory } from "../ui/installer-ui";
 import { ApprovalOptions, ApprovalResult } from "../ui/approval";
+import { ClackInstallerUi } from "../ui/installer-ui";
 
 const STACK_PATH = "/tmp/home/.memorymesh/stack/docker-compose.yml";
 const STACK_DIR = "/tmp/home/.memorymesh/stack";
@@ -170,6 +179,24 @@ function createBaseRunnerMap(): Record<string, { code: number; stdout?: string }
       code: 0,
     },
   };
+}
+
+async function renderEmbeddingLabelsForExistingDimension(
+  existingDimension: number | null
+): Promise<Array<{ value: string; label: string }>> {
+  setupWizardSelectMock.mockReset();
+  setupWizardIsCancelMock.mockReset();
+  setupWizardIsCancelMock.mockReturnValue(false);
+  setupWizardSelectMock.mockResolvedValue("nomic-embed-text");
+
+  const ui = new ClackInstallerUi();
+  await ui.selectEmbeddingModel({ existingDimension });
+
+  const call = setupWizardSelectMock.mock.calls[0]?.[0] as {
+    options: Array<{ value: string; label: string }>;
+  };
+
+  return call.options;
 }
 
 describe("setup wizard", () => {
@@ -645,6 +672,106 @@ describe("setup wizard", () => {
     expect(
       runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
     ).toBe(true);
+  });
+
+  it("renders recommendation and reset labels in reuse-existing flow from persisted managed state when probe is unavailable", async () => {
+    const fs: IFileSystem = {
+      exists: (path: string) =>
+        path.endsWith("apps/server/Dockerfile")
+        || path.endsWith("package.json")
+        || path.endsWith(".memorymesh")
+        || path.endsWith("stack/docker-compose.yml")
+        || path.endsWith(".memorymesh/runtime.env"),
+      mkdir: async () => {},
+      read: async (path: string) => {
+        if (path.endsWith(".memorymesh/runtime.env")) {
+          return [
+            "MEMORYMESH_EMBEDDING_MODE=medium",
+            "EMBEDDING_MODEL=mxbai-embed-large",
+            "MEMORYMESH_EMBEDDING_DIMENSION=1024",
+            "",
+          ].join("\n");
+        }
+        return "{}";
+      },
+      write: async () => {},
+    };
+    const map = createBaseRunnerMap();
+    map["curl -fsS http://localhost:6333/collections/memories"] = { code: 1 };
+    const runner = new FakeRunner(map);
+    const ui = new FakeUi(false, "nomic-embed-text", "reuse_existing");
+
+    const code = await runSetupWizard({
+      fs,
+      ui,
+      runner,
+      spinnerFactory: new FakeSpinnerFactory(),
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
+      homeDir: "/tmp/home",
+      platform: "darwin",
+    });
+
+    expect(code).toBe("completed");
+    expect(ui.embeddingPromptExistingDimension).toBe(1024);
+
+    const options = await renderEmbeddingLabelsForExistingDimension(
+      ui.embeddingPromptExistingDimension
+    );
+    const flash = options.find((option) => option.value === "nomic-embed-text");
+    const medium = options.find((option) => option.value === "mxbai-embed-large");
+
+    expect(medium?.label).toContain("Recommended (matches existing data)");
+    expect(flash?.label).toContain("Will require reset");
+  });
+
+  it("renders recommendation and reset labels in reuse-existing flow from local-build env authority before probe", async () => {
+    const fs: IFileSystem = {
+      exists: (path: string) =>
+        path.endsWith("apps/server/Dockerfile")
+        || path.endsWith("package.json")
+        || path.endsWith(".memorymesh")
+        || path.endsWith("stack/docker-compose.yml")
+        || path === "/tmp/workspace/docker-compose.yml",
+      mkdir: async () => {},
+      read: async () => "{}",
+      write: async () => {},
+    };
+    const map = createBaseRunnerMap();
+    map["curl -fsS http://localhost:6333/collections/memories"] = { code: 1 };
+    const runner = new FakeRunner(map);
+    const ui = new FakeUi(false, "nomic-embed-text", "reuse_existing");
+
+    const code = await runSetupWizard({
+      fs,
+      ui,
+      runner,
+      spinnerFactory: new FakeSpinnerFactory(),
+      cwd: "/tmp/workspace",
+      env: {
+        MEMORYMESH_USE_LOCAL_BUILD: "true",
+        MEMORYMESH_EMBEDDING_MODE: "flash",
+        EMBEDDING_MODEL: "nomic-embed-text",
+        MEMORYMESH_EMBEDDING_DIMENSION: "768",
+      },
+      homeDir: "/tmp/home",
+      platform: "darwin",
+    });
+
+    expect(code).toBe("completed");
+    expect(ui.embeddingPromptExistingDimension).toBe(768);
+    expect(
+      runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
+    ).toBe(false);
+
+    const options = await renderEmbeddingLabelsForExistingDimension(
+      ui.embeddingPromptExistingDimension
+    );
+    const flash = options.find((option) => option.value === "nomic-embed-text");
+    const medium = options.find((option) => option.value === "mxbai-embed-large");
+
+    expect(flash?.label).toContain("Recommended (matches existing data)");
+    expect(medium?.label).toContain("Will require reset");
   });
 
   it("exits setup when dirty state prompt selects exit", async () => {
