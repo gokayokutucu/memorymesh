@@ -3,9 +3,20 @@ name: CI
 on:
   push:
     branches:
+      - main
       - dev
       - "feature/**"
   pull_request:
+    branches:
+      - main
+      - dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build_test:
@@ -32,4 +43,3 @@ jobs:
 
       - name: NPM Pack Check (dry-run)
         run: npm run -w memorymesh pack:check
-
