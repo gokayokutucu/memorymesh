@@ -1,0 +1,65 @@
+{
+  "name": "memorymesh",
+  "version": "0.1.0",
+  "description": "MemoryMesh CLI installer and runtime menu for managing local MemoryMesh stack",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gokayokutucu/memorymesh.git"
+  },
+  "homepage": "https://github.com/gokayokutucu/memorymesh#readme",
+  "bugs": {
+    "url": "https://github.com/gokayokutucu/memorymesh/issues"
+  },
+  "bin": {
+    "memorymesh": "dist/src/main.js"
+  },
+  "files": [
+    "dist/**",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "@qdrant/js-client-rest": "^1.17.0",
+    "chalk": "^4.1.2",
+    "execa": "^5.1.1",
+    "mongodb": "^6.21.0",
+    "neo4j-driver": "^5.28.3",
+    "ollama": "^0.6.3",
+    "ora": "^5.4.1"
+  },
+  "devDependencies": {
+    "@memorymesh/core": "*",
+    "@memorymesh/runtime": "*",
+    "@types/jest": "latest",
+    "@types/node": "latest",
+    "jest": "latest",
+    "ts-jest": "latest",
+    "ts-node": "latest",
+    "typescript": "latest"
+  },
+  "scripts": {
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run build -w @memorymesh/core && npm run build -w @memorymesh/runtime && npm run clean && tsc && node scripts/embed-workspace-deps.js",
+    "prepack": "npm run build",
+    "pack:check": "npm pack --dry-run",
+    "publish:check": "npm publish --dry-run",
+    "import:gpt": "ts-node scripts/gpt-import.ts",
+    "cli": "ts-node src/main.ts",
+    "test": "jest"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/src/__tests__/**/*.test.ts"
+    ]
+  }
+}
