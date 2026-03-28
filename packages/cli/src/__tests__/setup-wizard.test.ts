@@ -577,6 +577,73 @@ describe("setup wizard", () => {
     ).toBe(true);
   });
 
+  it("completes clean-install reset phase before model selection is shown", async () => {
+    const fs: IFileSystem = {
+      exists: (path: string) =>
+        path.endsWith("apps/server/Dockerfile") ||
+        path.endsWith("package.json") ||
+        path.endsWith(".memorymesh") ||
+        path.endsWith("stack/docker-compose.yml"),
+      mkdir: async () => {},
+      read: async () => "{}",
+      write: async () => {},
+    };
+    const map = createBaseRunnerMap();
+    map["curl -fsS http://localhost:6333/collections/memories"] = {
+      code: 0,
+      stdout: JSON.stringify({
+        result: {
+          config: {
+            params: {
+              vectors: {
+                size: 768,
+              },
+            },
+          },
+        },
+      }),
+    };
+    const runner = new FakeRunner(map, "mxbai-embed-large");
+    const spinnerFactory = new FakeSpinnerFactory();
+    let selectionCallCount = -1;
+
+    class OrderedUi extends FakeUi {
+      async selectEmbeddingModel(
+        input?: { existingDimension: number | null }
+      ): Promise<"nomic-embed-text" | "mxbai-embed-large" | null> {
+        selectionCallCount = runner.calls.length;
+        return super.selectEmbeddingModel(input);
+      }
+    }
+
+    const ui = new OrderedUi(false, "mxbai-embed-large", "clean_install");
+
+    const code = await runSetupWizard({
+      fs,
+      ui,
+      runner,
+      spinnerFactory,
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
+      homeDir: "/tmp/home",
+      platform: "darwin",
+      removePath: async () => {},
+    });
+
+    expect(code).toBe("completed");
+    const downWithVolumesIndex = runner.calls.indexOf(
+      `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`
+    );
+    const clearCollectionIndex = runner.calls.indexOf(
+      "curl -fsS -X DELETE http://localhost:6333/collections/memories"
+    );
+    expect(selectionCallCount).toBeGreaterThanOrEqual(0);
+    expect(downWithVolumesIndex).toBeGreaterThanOrEqual(0);
+    expect(clearCollectionIndex).toBeGreaterThanOrEqual(0);
+    expect(downWithVolumesIndex).toBeLessThan(selectionCallCount);
+    expect(clearCollectionIndex).toBeLessThan(selectionCallCount);
+  });
+
   it("rolls back transient managed state when clean-install run is cancelled before completion", async () => {
     const fs: IFileSystem = {
       exists: (path: string) =>

@@ -962,6 +962,11 @@ describe("runtime menu", () => {
       expect.anything()
     );
     expect(mockedWriteInstallerRuntimeEnv).toHaveBeenCalled();
+    expect(mockedSetSessionSemanticEmbeddingAuthority).toHaveBeenCalledWith({
+      embeddingMode: "medium",
+      embeddingModel: "mxbai-embed-large",
+      embeddingDimension: 1024,
+    });
     expect(mockedRunEmbeddingMismatchFlow).not.toHaveBeenCalled();
   });
 
@@ -989,6 +994,7 @@ describe("runtime menu", () => {
 
     expect(mockedPersistInstallConfig).not.toHaveBeenCalled();
     expect(mockedWriteInstallerRuntimeEnv).not.toHaveBeenCalled();
+    expect(mockedSetSessionSemanticEmbeddingAuthority).not.toHaveBeenCalled();
     expect(ui.notes.some((note) => note.includes("No settings changes applied."))).toBe(true);
     expect(mockedRunEmbeddingMismatchFlow).not.toHaveBeenCalled();
   });
@@ -1000,8 +1006,43 @@ describe("runtime menu", () => {
 
     expect(mockedPersistInstallConfig).not.toHaveBeenCalled();
     expect(mockedWriteInstallerRuntimeEnv).not.toHaveBeenCalled();
+    expect(mockedSetSessionSemanticEmbeddingAuthority).not.toHaveBeenCalled();
     expect(ui.notes.some((note) => note.includes("No settings changes applied."))).toBe(true);
     expect(mockedRunEmbeddingMismatchFlow).not.toHaveBeenCalled();
+  });
+
+  it("uses refreshed same-session embedding authority for import immediately after settings change", async () => {
+    const ui = new FakeUi(["settings", "import_documents", "exit"], ["/tmp/docs", "", ""], [
+      "medium",
+    ]);
+    mockedResolveSemanticEmbeddingAuthority.mockResolvedValue({
+      embedding: {
+        embeddingMode: "flash",
+        embeddingModel: "nomic-embed-text",
+        embeddingDimension: 768,
+      },
+      source: "live_detection",
+    });
+    mockedRunEmbeddingMismatchFlow.mockResolvedValue({ status: "no_mismatch" });
+
+    await runRuntimeMenu({
+      ui,
+      runner: new NoopRunner(),
+      homeDir: "/tmp/home",
+      readLastDocumentImportPath: mockedReadLastDocumentImportPath,
+      persistLastDocumentImportPath: mockedPersistLastDocumentImportPath,
+    });
+
+    expect(mockedSetSessionSemanticEmbeddingAuthority).toHaveBeenCalledWith({
+      embeddingMode: "medium",
+      embeddingModel: "mxbai-embed-large",
+      embeddingDimension: 1024,
+    });
+    expect(mockedRunEmbeddingMismatchFlow).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        existingDimension: 1024,
+      })
+    );
   });
 
   it("runs centralized mismatch guard before import action and cancels action on reject", async () => {
