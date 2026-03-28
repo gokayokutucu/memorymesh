@@ -45,6 +45,14 @@ jest.mock("../installer/setup-wizard", () => ({
   runSetupWizard: jest.fn(),
 }));
 
+jest.mock("../installer/semantic-authority", () => ({
+  getSessionSemanticEmbeddingAuthority: jest.fn(),
+}));
+
+jest.mock("../installer/runtime-environment-context", () => ({
+  applyRuntimeEnvironmentBootstrap: jest.fn(),
+}));
+
 import { runMain } from "../main";
 import { runImportGptCommand } from "../commands/import-gpt";
 import { runImportDocumentsCommand } from "../commands/import-documents";
@@ -61,6 +69,8 @@ import { runUpgradeCommand } from "../commands/upgrade";
 import { resolveUserHomeDir } from "../system/runtime-home";
 import { isMemoryMeshInstalled } from "../installer/first-run";
 import { runSetupWizard } from "../installer/setup-wizard";
+import { getSessionSemanticEmbeddingAuthority } from "../installer/semantic-authority";
+import { applyRuntimeEnvironmentBootstrap } from "../installer/runtime-environment-context";
 
 const mockedRunImportGptCommand = runImportGptCommand as jest.MockedFunction<
   typeof runImportGptCommand
@@ -96,12 +106,32 @@ const mockedIsMemoryMeshInstalled = isMemoryMeshInstalled as jest.MockedFunction
   typeof isMemoryMeshInstalled
 >;
 const mockedRunSetupWizard = runSetupWizard as jest.MockedFunction<typeof runSetupWizard>;
+const mockedGetSessionSemanticEmbeddingAuthority =
+  getSessionSemanticEmbeddingAuthority as jest.MockedFunction<
+    typeof getSessionSemanticEmbeddingAuthority
+  >;
+const mockedApplyRuntimeEnvironmentBootstrap =
+  applyRuntimeEnvironmentBootstrap as jest.MockedFunction<
+    typeof applyRuntimeEnvironmentBootstrap
+  >;
 
 describe("main CLI router", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockedResolveUserHomeDir.mockReturnValue("/home/test");
     mockedRunRuntimeMenu.mockResolvedValue(0);
+    mockedGetSessionSemanticEmbeddingAuthority.mockReturnValue(null);
+    mockedApplyRuntimeEnvironmentBootstrap.mockResolvedValue({
+      context: {
+        mode: "installed-cli",
+        isCloud: false,
+        usesExternalSecrets: false,
+        semanticAuthorityOrder: ["session", "config", "runtime_env", "live_detection"],
+        runtimeEnvEnabled: true,
+      },
+      runtimeEnvPath: "/home/test/.memorymesh/runtime.env",
+      runtimeEnvLoaded: true,
+    });
   });
 
   it("runs setup on first launch", async () => {
@@ -115,6 +145,27 @@ describe("main CLI router", () => {
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(mockedRunSetupWizard).toHaveBeenCalledTimes(1);
     expect(mockedRunRuntimeMenu).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes setup session context into runtime menu when available", async () => {
+    mockedIsMemoryMeshInstalled.mockReturnValue(false);
+    mockedRunSetupWizard.mockResolvedValue("completed");
+    mockedGetSessionSemanticEmbeddingAuthority.mockReturnValue({
+      embeddingMode: "medium",
+      embeddingModel: "mxbai-embed-large",
+      embeddingDimension: 1024,
+    });
+
+    const code = await runMain([]);
+
+    expect(code).toBe(0);
+    expect(mockedRunRuntimeMenu).toHaveBeenCalledWith({
+      sessionEmbeddingAuthority: {
+        embeddingMode: "medium",
+        embeddingModel: "mxbai-embed-large",
+        embeddingDimension: 1024,
+      },
+    });
   });
 
   it("stops before runtime menu when setup is cancelled", async () => {
@@ -168,6 +219,10 @@ describe("main CLI router", () => {
       "--path",
       "/tmp/export",
     ]);
+    expect(mockedApplyRuntimeEnvironmentBootstrap).toHaveBeenCalledWith({
+      homeDir: "/home/test",
+      env: process.env,
+    });
   });
 
   it("routes import:documents command to direct importer", async () => {

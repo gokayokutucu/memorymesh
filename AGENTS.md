@@ -178,3 +178,5 @@ Phase scope for this repo:
   - search result rendering
   - user-visible summaries and status lines
 - Prefer restoring previously working user-visible behavior when regression is detected.
+
+- If an implementation change causes an existing unit or integration test to fail, do NOT immediately rewrite that test to match the new behavior. First report which test is failing, why the implementation now disagrees with the test, and get approval before changing the test. Treat this as a drift-prevention rule unless the user explicitly approves the test update.

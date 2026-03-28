@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import { isMemoryMeshInstalled } from "./installer/first-run";
+import { applyRuntimeEnvironmentBootstrap } from "./installer/runtime-environment-context";
 import { runSetupWizard } from "./installer/setup-wizard";
+import { getSessionSemanticEmbeddingAuthority } from "./installer/semantic-authority";
 import { resolveUserHomeDir } from "./system/runtime-home";
 import { style } from "./terminal-style";
 import { renderSearchResultLines } from "./commands/search";
@@ -25,16 +27,18 @@ function printMainHelp(): void {
 }
 
 export async function runMain(argv: string[]): Promise<number> {
+  let homeDir: string;
+  try {
+    homeDir = resolveUserHomeDir(process.platform, process.env);
+  } catch (error) {
+    console.error(style.error(String(error)));
+    return 1;
+  }
+
+  await applyRuntimeEnvironmentBootstrap({ homeDir, env: process.env });
+
   if (argv.length === 0) {
     console.log(style.renderTitle());
-
-    let homeDir: string;
-    try {
-      homeDir = resolveUserHomeDir(process.platform, process.env);
-    } catch (error) {
-      console.error(style.error(String(error)));
-      return 1;
-    }
 
     if (!isMemoryMeshInstalled(homeDir)) {
       const setupResult = await runSetupWizard();
@@ -44,7 +48,9 @@ export async function runMain(argv: string[]): Promise<number> {
     }
 
     const { runRuntimeMenu } = await import("./commands/menu");
-    return runRuntimeMenu();
+    return runRuntimeMenu({
+      sessionEmbeddingAuthority: getSessionSemanticEmbeddingAuthority() ?? undefined,
+    });
   }
 
   const [command, ...rest] = argv;

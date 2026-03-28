@@ -1,5 +1,7 @@
 const mockGetCollections = jest.fn();
+const mockGetCollection = jest.fn();
 const mockCreateCollection = jest.fn();
+const mockRecreateCollection = jest.fn();
 const mockUpsert = jest.fn();
 const mockSearch = jest.fn();
 const mockScroll = jest.fn();
@@ -8,7 +10,9 @@ const mockRetrieve = jest.fn();
 jest.mock("@qdrant/js-client-rest", () => ({
   QdrantClient: jest.fn().mockImplementation(() => ({
     getCollections: mockGetCollections,
+    getCollection: mockGetCollection,
     createCollection: mockCreateCollection,
+    recreateCollection: mockRecreateCollection,
     upsert: mockUpsert,
     search: mockSearch,
     scroll: mockScroll,
@@ -42,6 +46,9 @@ describe("storage resilience", () => {
     mockGetCollections
       .mockRejectedValueOnce(new Error("fetch failed"))
       .mockResolvedValueOnce({ collections: [{ name: "memories" }] });
+    mockGetCollection.mockResolvedValue({
+      config: { params: { vectors: { size: 768 } } },
+    });
 
     const storage = await import("../storage");
     await storage.ensureCollection();
@@ -71,6 +78,9 @@ describe("storage resilience", () => {
 
   it("caches collection existence and avoids repeated getCollections calls", async () => {
     mockGetCollections.mockResolvedValue({ collections: [{ name: "memories" }] });
+    mockGetCollection.mockResolvedValue({
+      config: { params: { vectors: { size: 768 } } },
+    });
 
     const storage = await import("../storage");
     await storage.ensureCollection();
@@ -102,6 +112,9 @@ describe("storage resilience", () => {
       .mockRejectedValueOnce(new Error("collection does not exist"))
       .mockResolvedValueOnce([]);
     mockGetCollections.mockResolvedValue({ collections: [{ name: "memories" }] });
+    mockGetCollection.mockResolvedValue({
+      config: { params: { vectors: { size: 768 } } },
+    });
 
     const storage = await import("../storage");
     const results = await storage.searchPoints([0.1], { query: "test", limit: 1 });
@@ -183,6 +196,9 @@ describe("storage resilience", () => {
     process.env.MEMORYMESH_EMBEDDING_MODE = "flash";
     process.env.MEMORYMESH_EMBEDDING_DIMENSION = "768";
     mockGetCollections.mockResolvedValueOnce({ collections: [{ name: "memories" }] });
+    mockGetCollection.mockResolvedValueOnce({
+      config: { params: { vectors: { size: 768 } } },
+    });
 
     const storage = await import("../storage");
     await storage.ensureCollection();
@@ -215,5 +231,26 @@ describe("storage resilience", () => {
       })
     );
     expect(mockUpsert).toHaveBeenCalledTimes(2);
+  });
+
+  it("recreates an existing collection when the stored dimension does not match", async () => {
+    process.env.EMBEDDING_MODEL = "mxbai-embed-large";
+    process.env.MEMORYMESH_EMBEDDING_MODE = "medium";
+    process.env.MEMORYMESH_EMBEDDING_DIMENSION = "1024";
+    mockGetCollections.mockResolvedValue({ collections: [{ name: "memories" }] });
+    mockGetCollection.mockResolvedValue({
+      config: { params: { vectors: { size: 768 } } },
+    });
+    mockRecreateCollection.mockResolvedValue({ status: "ok" });
+
+    const storage = await import("../storage");
+    await storage.ensureCollection();
+
+    expect(mockRecreateCollection).toHaveBeenCalledWith(
+      "memories",
+      expect.objectContaining({
+        vectors: expect.objectContaining({ size: 1024 }),
+      })
+    );
   });
 });
