@@ -87,14 +87,34 @@ class FakeRunner implements ICommandRunner {
 }
 
 class FakeSpinner implements ISpinner {
-  succeed(): void {}
-  fail(): void {}
+  constructor(
+    private readonly onSucceed: (text: string) => void,
+    private readonly onFail: (text: string) => void
+  ) {}
+  succeed(text: string): void {
+    this.onSucceed(text);
+  }
+  fail(text: string): void {
+    this.onFail(text);
+  }
   stop(): void {}
 }
 
 class FakeSpinnerFactory implements ISpinnerFactory {
-  start(): ISpinner {
-    return new FakeSpinner();
+  started: string[] = [];
+  succeeded: string[] = [];
+  failed: string[] = [];
+
+  start(text: string): ISpinner {
+    this.started.push(text);
+    return new FakeSpinner(
+      (successText: string) => {
+        this.succeeded.push(successText);
+      },
+      (failureText: string) => {
+        this.failed.push(failureText);
+      }
+    );
   }
 }
 
@@ -485,15 +505,31 @@ describe("setup wizard", () => {
       read: async () => "{}",
       write: async () => {},
     };
-    const runner = new FakeRunner(createBaseRunnerMap());
-    const ui = new FakeUi(false, "nomic-embed-text", "clean_install");
+    const map = createBaseRunnerMap();
+    map["curl -fsS http://localhost:6333/collections/memories"] = {
+      code: 0,
+      stdout: JSON.stringify({
+        result: {
+          config: {
+            params: {
+              vectors: {
+                size: 768,
+              },
+            },
+          },
+        },
+      }),
+    };
+    const runner = new FakeRunner(map, "mxbai-embed-large");
+    const ui = new FakeUi(false, "mxbai-embed-large", "clean_install");
     const removedPaths: string[] = [];
+    const spinnerFactory = new FakeSpinnerFactory();
 
     const code = await runSetupWizard({
       fs,
       ui,
       runner,
-      spinnerFactory: new FakeSpinnerFactory(),
+      spinnerFactory,
       cwd: "/tmp/workspace",
       env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
       homeDir: "/tmp/home",
@@ -505,17 +541,40 @@ describe("setup wizard", () => {
 
     expect(code).toBe("completed");
     expect(ui.dirtyPromptCalls).toBe(1);
+    expect(ui.approvalCalls).toBe(0);
+    expect(spinnerFactory.started).toEqual(
+      expect.arrayContaining([
+        "Stopping existing stack...",
+        "Removing containers and volumes...",
+        "Clearing vector store...",
+        "Removing installer-managed state...",
+        "Preparing fresh environment...",
+      ])
+    );
     expect(
       runner.calls.includes(
         `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`
       )
+    ).toBe(true);
+    expect(
+      runner.calls.includes(
+        `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --remove-orphans`
+      )
+    ).toBe(true);
+    expect(
+      runner.calls.includes("curl -fsS -X DELETE http://localhost:6333/collections/memories")
     ).toBe(true);
     expect(removedPaths).toContain("/tmp/home/.memorymesh");
     expect(removedPaths).toContain("/tmp/home/.memorymesh/checkpoints");
     expect(ui.embeddingPromptExistingDimension).toBeNull();
     expect(
       runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      runner.calls.includes(
+        'curl -fsS -X PUT http://localhost:6333/collections/memories -H Content-Type: application/json -d {"vectors":{"size":1024,"distance":"Cosine"}}'
+      )
+    ).toBe(true);
   });
 
   it("rolls back transient managed state when clean-install run is cancelled before completion", async () => {

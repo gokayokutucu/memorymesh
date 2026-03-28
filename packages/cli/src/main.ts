@@ -2,6 +2,7 @@
 
 import { isMemoryMeshInstalled } from "./installer/first-run";
 import { runSetupWizard } from "./installer/setup-wizard";
+import { getSessionSemanticEmbeddingAuthority } from "./installer/semantic-authority";
 import { resolveUserHomeDir } from "./system/runtime-home";
 import { style } from "./terminal-style";
 import { renderSearchResultLines } from "./commands/search";
@@ -44,7 +45,9 @@ export async function runMain(argv: string[]): Promise<number> {
     }
 
     const { runRuntimeMenu } = await import("./commands/menu");
-    return runRuntimeMenu();
+    return runRuntimeMenu({
+      sessionEmbeddingAuthority: getSessionSemanticEmbeddingAuthority() ?? undefined,
+    });
   }
 
   const [command, ...rest] = argv;

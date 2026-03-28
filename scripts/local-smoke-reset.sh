@@ -60,8 +60,12 @@ build() {
 pack_install() {
   step "Pack CLI workspace"
   require_command npm
+  require_command node
   local tarball
-  tarball="$(npm pack -w @okutucu/memorymesh)"
+  tarball="$(
+    npm pack -w @okutucu/memorymesh --json \
+      | node -e 'let s="";process.stdin.on("data",(d)=>{s+=d;});process.stdin.on("end",()=>{const parsed=JSON.parse(s);process.stdout.write(parsed[0]?.filename ?? "");});'
+  )"
   if [ -z "${tarball}" ] || [ ! -f "${tarball}" ]; then
     echo "Failed to produce npm pack tarball"
     exit 1
@@ -72,6 +76,11 @@ pack_install() {
 
   step "Reset shell command hash"
   hash -r || true
+
+  step "Ensure global npm bin is in PATH"
+  local npm_prefix
+  npm_prefix="$(npm prefix -g)"
+  export PATH="${npm_prefix}/bin:${PATH}"
 
   step "Verify memorymesh is available"
   require_command memorymesh
@@ -115,4 +124,3 @@ case "${MODE}" in
     exit 1
     ;;
 esac
-
