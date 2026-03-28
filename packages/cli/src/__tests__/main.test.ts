@@ -49,6 +49,10 @@ jest.mock("../installer/semantic-authority", () => ({
   getSessionSemanticEmbeddingAuthority: jest.fn(),
 }));
 
+jest.mock("../installer/runtime-environment-context", () => ({
+  applyRuntimeEnvironmentBootstrap: jest.fn(),
+}));
+
 import { runMain } from "../main";
 import { runImportGptCommand } from "../commands/import-gpt";
 import { runImportDocumentsCommand } from "../commands/import-documents";
@@ -66,6 +70,7 @@ import { resolveUserHomeDir } from "../system/runtime-home";
 import { isMemoryMeshInstalled } from "../installer/first-run";
 import { runSetupWizard } from "../installer/setup-wizard";
 import { getSessionSemanticEmbeddingAuthority } from "../installer/semantic-authority";
+import { applyRuntimeEnvironmentBootstrap } from "../installer/runtime-environment-context";
 
 const mockedRunImportGptCommand = runImportGptCommand as jest.MockedFunction<
   typeof runImportGptCommand
@@ -105,6 +110,10 @@ const mockedGetSessionSemanticEmbeddingAuthority =
   getSessionSemanticEmbeddingAuthority as jest.MockedFunction<
     typeof getSessionSemanticEmbeddingAuthority
   >;
+const mockedApplyRuntimeEnvironmentBootstrap =
+  applyRuntimeEnvironmentBootstrap as jest.MockedFunction<
+    typeof applyRuntimeEnvironmentBootstrap
+  >;
 
 describe("main CLI router", () => {
   beforeEach(() => {
@@ -112,6 +121,17 @@ describe("main CLI router", () => {
     mockedResolveUserHomeDir.mockReturnValue("/home/test");
     mockedRunRuntimeMenu.mockResolvedValue(0);
     mockedGetSessionSemanticEmbeddingAuthority.mockReturnValue(null);
+    mockedApplyRuntimeEnvironmentBootstrap.mockResolvedValue({
+      context: {
+        mode: "installed-cli",
+        isCloud: false,
+        usesExternalSecrets: false,
+        semanticAuthorityOrder: ["session", "config", "runtime_env", "live_detection"],
+        runtimeEnvEnabled: true,
+      },
+      runtimeEnvPath: "/home/test/.memorymesh/runtime.env",
+      runtimeEnvLoaded: true,
+    });
   });
 
   it("runs setup on first launch", async () => {
@@ -199,6 +219,10 @@ describe("main CLI router", () => {
       "--path",
       "/tmp/export",
     ]);
+    expect(mockedApplyRuntimeEnvironmentBootstrap).toHaveBeenCalledWith({
+      homeDir: "/home/test",
+      env: process.env,
+    });
   });
 
   it("routes import:documents command to direct importer", async () => {
