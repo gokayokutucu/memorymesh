@@ -10,6 +10,7 @@ import {
   getMemoryByRef,
   getMemoryStatus,
   saveMemoryForImport,
+  waitForBackgroundSaveTasks,
 } from "./memory";
 
 const SAVE_STATUS_POLL_INTERVAL_MS = 25;
@@ -35,7 +36,13 @@ export class RuntimeImporterGateway implements IImporterGateway {
       throw toImportSaveError("partial_persistence");
     }
 
-    const status = await waitForFinalSaveStatus(result.id);
+    let status = await waitForFinalSaveStatus(result.id);
+    if (!status || status.status === "pending") {
+      // Import writes are serialized. If polling timed out while a save is still
+      // running, drain background tasks once and re-check terminal status.
+      await waitForBackgroundSaveTasks();
+      status = getMemoryStatus(result.id);
+    }
     if (!status || status.status === "pending") {
       throw toImportSaveError("save_status_pending_timeout");
     }

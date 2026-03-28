@@ -15,14 +15,26 @@ import {
   readInstallerRuntimeEnv,
   writeInstallerRuntimeEnv,
 } from "../installer/runtime-config";
-import { detectQdrantCollectionDimension } from "../installer/qdrant-dimension";
+import { ensureQdrantCollectionDimension } from "../installer/qdrant-collection";
 import { runEmbeddingMismatchFlow } from "../installer/embedding-mismatch-flow";
 import { resolveInstallerManagedStack } from "../installer/stack-packaging";
+import {
+  ISemanticEmbeddingAuthority,
+  resolveSemanticEmbeddingAuthority,
+  setSessionSemanticEmbeddingAuthority,
+} from "../installer/semantic-authority";
 import { IFileSystem, nodeFileSystem } from "../system/filesystem";
 import { resolveUserHomeDir } from "../system/runtime-home";
 import { ClackRuntimeMenuUi, IRuntimeMenuUi } from "../ui/runtime-menu";
 import { runWizard, WizardStep } from "../ui/wizard";
-import { downMemoryMeshStack, startMemoryMeshStack } from "../system/docker";
+import {
+  downMemoryMeshStack,
+  pullOllamaModelWithRetry,
+  startMemoryMeshStack,
+  startOllamaService,
+  verifySelectedEmbeddingModel,
+  waitForOllamaReady,
+} from "../system/docker";
 import { IStackContext } from "../system/stack-context";
 import { resolveAuthoritativeEmbeddingConfig } from "../installer/embedding-authority";
 import { renderSearchResultLines } from "./search";
@@ -39,6 +51,7 @@ export interface IRuntimeMenuDeps {
   persistLastImportPath: (homeDir: string, inputPath: string) => Promise<void>;
   readLastDocumentImportPath: (homeDir: string) => Promise<string | null>;
   persistLastDocumentImportPath: (homeDir: string, inputPath: string) => Promise<void>;
+  sessionEmbeddingAuthority?: ISemanticEmbeddingAuthority;
 }
 
 function createDefaultDeps(): IRuntimeMenuDeps {
@@ -52,7 +65,12 @@ function createDefaultDeps(): IRuntimeMenuDeps {
     persistLastImportPath: persistLastStartedChatGptImportPath,
     readLastDocumentImportPath: readLastStartedDocumentImportPath,
     persistLastDocumentImportPath: persistLastStartedDocumentImportPath,
+    sessionEmbeddingAuthority: undefined,
   };
+}
+
+interface IRuntimeSessionContextRef {
+  current: ISemanticEmbeddingAuthority | undefined;
 }
 
 async function handleImportChatGptAction(
@@ -411,7 +429,8 @@ async function handleSettingsAction(
   ui: IRuntimeMenuUi,
   runner: ICommandRunner,
   homeDir: string,
-  fs: IFileSystem
+  fs: IFileSystem,
+  sessionContextRef: IRuntimeSessionContextRef
 ): Promise<number> {
   const installConfig = await readInstallConfig(homeDir, fs);
   const runtimeEnv = await readInstallerRuntimeEnv(homeDir, fs);
@@ -444,8 +463,14 @@ async function handleSettingsAction(
     embeddingDimension: mapEmbeddingModeToDimension(selectedMode),
   };
 
-  const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
-  const existingDimension = await detectQdrantCollectionDimension(runner, collectionName);
+  const existingDimension = sessionContextRef.current?.embeddingDimension ?? (
+    await resolveSemanticEmbeddingAuthority({
+      homeDir,
+      fs,
+      runner,
+      collectionName: process.env.QDRANT_COLLECTION?.trim() || "memories",
+    })
+  )?.embedding.embeddingDimension ?? null;
   const nextRuntimeEnv: NodeJS.ProcessEnv = {
     EMBEDDING_MODEL: nextConfig.embeddingModel,
     MEMORYMESH_EMBEDDING_MODE: nextConfig.embeddingMode,
@@ -455,31 +480,37 @@ async function handleSettingsAction(
     projectDir: installConfig.stackProjectDir,
     composeFilePath: installConfig.composeFilePath,
   };
+  const requiresVectorReindex =
+    existingDimension !== null && existingDimension !== nextConfig.embeddingDimension;
 
-  try {
-    const mismatchResult = await runEmbeddingMismatchFlow({
-      existingDimension,
-      selectedDimension: nextConfig.embeddingDimension,
-      selectedMode: nextConfig.embeddingMode,
-      selectedModel,
-      ui,
-      onApprovedReset: async () => {
-        await ui.note("Embedding mismatch detected. Reset required.");
-        await runEmbeddingReset(
-          ui,
-          runner,
-          stackContext,
-          nextRuntimeEnv,
-          installConfig.stackMode ?? "release-image",
-          homeDir
-        );
-      },
+  if (requiresVectorReindex) {
+    const approval = await ui.promptApproval({
+      title: "Embedding model change requires vector reindex",
+      bodyLines: [
+        `Existing data uses embedding dimension ${existingDimension}.`,
+        `Selected mode (${nextConfig.embeddingMode}, ${nextConfig.embeddingModel}) uses embedding dimension ${nextConfig.embeddingDimension}.`,
+        "Continuing will recreate the vector collection for the new model.",
+        "Do you want to continue?",
+      ],
+      confirmLabel: "Yes, reconfigure now",
+      rejectLabel: "No, keep current model",
     });
-
-    if (mismatchResult.status === "rejected" || mismatchResult.status === "cancelled") {
+    if (approval.status === "rejected" || approval.status === "cancelled") {
       await ui.note("No settings changes applied.");
       return 0;
     }
+  }
+
+  try {
+    await runEmbeddingReconfiguration(
+      ui,
+      runner,
+      stackContext,
+      nextRuntimeEnv,
+      installConfig.stackMode ?? "release-image",
+      nextConfig.embeddingModel,
+      nextConfig.embeddingDimension
+    );
   } catch (error) {
     await ui.note(String(error));
     return 1;
@@ -499,6 +530,16 @@ async function handleSettingsAction(
     },
     fs
   );
+  setSessionSemanticEmbeddingAuthority({
+    embeddingMode: nextConfig.embeddingMode,
+    embeddingModel: nextConfig.embeddingModel,
+    embeddingDimension: nextConfig.embeddingDimension,
+  });
+  sessionContextRef.current = {
+    embeddingMode: nextConfig.embeddingMode,
+    embeddingModel: nextConfig.embeddingModel,
+    embeddingDimension: nextConfig.embeddingDimension,
+  };
   await ui.note(`Settings saved: embeddingMode=${nextConfig.embeddingMode}.`);
   await ui.note(`Derived embeddingModel=${nextConfig.embeddingModel}.`);
   await ui.note(`Derived embeddingDimension=${nextConfig.embeddingDimension}.`);
@@ -506,6 +547,68 @@ async function handleSettingsAction(
     "Embedding model updated."
   );
   return 0;
+}
+
+async function runEmbeddingReconfiguration(
+  ui: IRuntimeMenuUi,
+  runner: ICommandRunner,
+  stackContext: IStackContext,
+  runtimeEnv: NodeJS.ProcessEnv,
+  stackMode: "release-image" | "local-dev-build",
+  selectedModel: string,
+  selectedDimension: number
+): Promise<void> {
+  await ui.note("Applying embedding runtime reconfiguration...");
+  const downResult = await downMemoryMeshStack(runner, stackContext, false);
+  if (!downResult.ok) {
+    throw new Error(downResult.message);
+  }
+
+  const startResult = await startMemoryMeshStack(
+    runner,
+    stackContext,
+    runtimeEnv,
+    stackMode
+  );
+  if (!startResult.ok) {
+    throw new Error(startResult.message);
+  }
+
+  const ollamaStarted = await startOllamaService(runner, stackContext, runtimeEnv);
+  if (!ollamaStarted.ok) {
+    throw new Error(ollamaStarted.message);
+  }
+  const ollamaReady = await waitForOllamaReady(runner, stackContext, runtimeEnv);
+  if (!ollamaReady.ok) {
+    throw new Error(ollamaReady.message);
+  }
+  const modelPull = await pullOllamaModelWithRetry(
+    runner,
+    selectedModel,
+    stackContext,
+    runtimeEnv
+  );
+  if (!modelPull.ok) {
+    throw new Error(modelPull.message);
+  }
+  const modelVerify = await verifySelectedEmbeddingModel(
+    runner,
+    stackContext,
+    selectedModel,
+    runtimeEnv
+  );
+  if (!modelVerify.ok) {
+    throw new Error(modelVerify.message);
+  }
+
+  const qdrantCollectionResult = await ensureQdrantCollectionDimension(runner, {
+    collectionName: process.env.QDRANT_COLLECTION?.trim() || "memories",
+    embeddingDimension: selectedDimension,
+  });
+  if (!qdrantCollectionResult.ok) {
+    throw new Error(qdrantCollectionResult.message);
+  }
+  await ui.note("Embedding runtime reconfiguration complete.");
 }
 
 async function runEmbeddingReset(
@@ -532,6 +635,19 @@ async function runEmbeddingReset(
   if (!startResult.ok) {
     throw new Error(startResult.message);
   }
+  const selectedDimension = Number.parseInt(
+    runtimeEnv.MEMORYMESH_EMBEDDING_DIMENSION?.trim() ?? "",
+    10
+  );
+  if (Number.isFinite(selectedDimension) && selectedDimension > 0) {
+    const qdrantCollectionResult = await ensureQdrantCollectionDimension(runner, {
+      collectionName: process.env.QDRANT_COLLECTION?.trim() || "memories",
+      embeddingDimension: selectedDimension,
+    });
+    if (!qdrantCollectionResult.ok) {
+      throw new Error(qdrantCollectionResult.message);
+    }
+  }
   await ui.note("Reset complete. Continuing action.");
 }
 
@@ -544,12 +660,19 @@ async function ensureEmbeddingCompatibilityOrReset(
   ui: IRuntimeMenuUi,
   runner: ICommandRunner,
   homeDir: string,
-  fs: IFileSystem
+  fs: IFileSystem,
+  sessionContextRef: IRuntimeSessionContextRef
 ): Promise<boolean> {
   try {
     const authority = await resolveAuthoritativeEmbeddingConfig(homeDir, fs);
-    const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
-    const existingDimension = await detectQdrantCollectionDimension(runner, collectionName);
+    const existingDimension = sessionContextRef.current?.embeddingDimension ?? (
+      await resolveSemanticEmbeddingAuthority({
+        homeDir,
+        fs,
+        runner,
+        collectionName: process.env.QDRANT_COLLECTION?.trim() || "memories",
+      })
+    )?.embedding.embeddingDimension ?? null;
     const mismatchResult = await runEmbeddingMismatchFlow({
       existingDimension,
       selectedDimension: authority.embedding.embeddingDimension,
@@ -570,6 +693,11 @@ async function ensureEmbeddingCompatibilityOrReset(
           authority.config.stackMode ?? "release-image",
           homeDir
         );
+        sessionContextRef.current = {
+          embeddingMode: authority.embedding.embeddingMode,
+          embeddingModel: authority.embedding.embeddingModel,
+          embeddingDimension: authority.embedding.embeddingDimension,
+        };
       },
     });
 
@@ -589,6 +717,12 @@ export async function runRuntimeMenu(
   deps: Partial<IRuntimeMenuDeps> = {}
 ): Promise<number> {
   const resolved = { ...createDefaultDeps(), ...deps };
+  const sessionContextRef: IRuntimeSessionContextRef = {
+    current: resolved.sessionEmbeddingAuthority,
+  };
+  if (sessionContextRef.current) {
+    setSessionSemanticEmbeddingAuthority(sessionContextRef.current);
+  }
 
   await resolved.ui.intro("MemoryMesh CLI");
 
@@ -604,7 +738,8 @@ export async function runRuntimeMenu(
         resolved.ui,
         resolved.runner,
         resolved.homeDir,
-        resolved.fs
+        resolved.fs,
+        sessionContextRef
       );
       if (!ready) {
         continue;
@@ -624,7 +759,8 @@ export async function runRuntimeMenu(
         resolved.ui,
         resolved.runner,
         resolved.homeDir,
-        resolved.fs
+        resolved.fs,
+        sessionContextRef
       );
       if (!ready) {
         continue;
@@ -643,7 +779,8 @@ export async function runRuntimeMenu(
         resolved.ui,
         resolved.runner,
         resolved.homeDir,
-        resolved.fs
+        resolved.fs,
+        sessionContextRef
       );
       if (!ready) {
         continue;
@@ -657,7 +794,8 @@ export async function runRuntimeMenu(
         resolved.ui,
         resolved.runner,
         resolved.homeDir,
-        resolved.fs
+        resolved.fs,
+        sessionContextRef
       );
       continue;
     }
@@ -667,7 +805,8 @@ export async function runRuntimeMenu(
         resolved.ui,
         resolved.runner,
         resolved.homeDir,
-        resolved.fs
+        resolved.fs,
+        sessionContextRef
       );
       if (!ready) {
         continue;
@@ -688,7 +827,8 @@ export async function runRuntimeMenu(
         resolved.ui,
         resolved.runner,
         resolved.homeDir,
-        resolved.fs
+        resolved.fs,
+        sessionContextRef
       );
       if (!ready) {
         continue;

@@ -28,23 +28,61 @@ export async function ensureCollection(): Promise<void> {
   );
   const exists = collections.collections.some((c) => c.name === collectionConfig.collection);
   if (!exists) {
-    await executeWithRetry(
-      async () =>
-        client.createCollection(collectionConfig.collection, {
+    await createCollection(client, collectionConfig);
+  } else {
+    const collectionInfo = await executeWithRetry(
+      async () => client.getCollection(collectionConfig.collection),
+      {
+        store: "qdrant",
+        operation: "getCollection",
+        isTransient: isTransientQdrantError,
+        transientFailureCode: "qdrant_transient_failure",
+      }
+    );
+    const params = collectionInfo.config?.params as
+      | ({ vectors?: { size?: number } } & { vector_size?: number })
+      | undefined;
+    const existingDimension = params?.vectors?.size ?? params?.vector_size ?? null;
+
+    if (existingDimension !== collectionConfig.embeddingDimension) {
+      await executeWithRetry(
+        async () => client.recreateCollection(collectionConfig.collection, {
           vectors: {
             size: collectionConfig.embeddingDimension,
             distance: "Cosine",
           },
         }),
-      {
-        store: "qdrant",
-        operation: "createCollection",
-        isTransient: isTransientQdrantError,
-        transientFailureCode: "qdrant_transient_failure",
-      }
-    );
+        {
+          store: "qdrant",
+          operation: "recreateCollection",
+          isTransient: isTransientQdrantError,
+          transientFailureCode: "qdrant_transient_failure",
+        }
+      );
+    }
   }
   collectionExistsCache.add(cacheKey);
+}
+
+async function createCollection(
+  client: QdrantClient,
+  collectionConfig: ReturnType<typeof resolveCollectionConfig>
+): Promise<void> {
+  await executeWithRetry(
+    async () =>
+      client.createCollection(collectionConfig.collection, {
+        vectors: {
+          size: collectionConfig.embeddingDimension,
+          distance: "Cosine",
+        },
+      }),
+    {
+      store: "qdrant",
+      operation: "createCollection",
+      isTransient: isTransientQdrantError,
+      transientFailureCode: "qdrant_transient_failure",
+    }
+  );
 }
 
 export async function savePoint(

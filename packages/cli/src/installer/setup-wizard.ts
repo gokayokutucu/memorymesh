@@ -3,7 +3,7 @@ import {
   resolveClaudeDesktopConfigPath,
   validateMemoryMeshMcpTarget,
 } from "./claude-config";
-import { persistInstallConfig, readInstallConfig } from "./first-run";
+import { persistInstallConfig } from "./first-run";
 import {
   IEmbeddingMismatchFlowResult,
   runEmbeddingMismatchFlow,
@@ -14,11 +14,18 @@ import {
   writeInstallerRuntimeEnv,
 } from "./runtime-config";
 import { detectQdrantCollectionDimension } from "./qdrant-dimension";
+import { ensureQdrantCollectionDimension } from "./qdrant-collection";
+import {
+  clearSessionSemanticEmbeddingAuthority,
+  resolveSemanticEmbeddingAuthority,
+  setSessionSemanticEmbeddingAuthority,
+} from "./semantic-authority";
 import { inspectDirtySetupState } from "./dirty-state";
-import { resetAndPrepareManagedStack, resetMemoryMeshState } from "./reset-state";
 import {
   ensureInstallerManagedStack,
+  getInstallerHomeDir,
   getInstallerManagedComposePath,
+  getInstallerManagedStackDir,
 } from "./stack-packaging";
 import { rm } from "node:fs/promises";
 import { ExecaCommandRunner, ICommandRunner } from "../system/command-runner";
@@ -26,6 +33,8 @@ import {
   checkServiceRunning,
   checkDockerDaemon,
   checkDockerInstalled,
+  downMemoryMeshStack,
+  ICheckResult,
   pullOllamaModelWithRetry,
   startMemoryMeshStack,
   startOllamaService,
@@ -34,7 +43,7 @@ import {
 } from "../system/docker";
 import { checkHttpHealth } from "../system/health";
 import { IFileSystem, nodeFileSystem } from "../system/filesystem";
-import { resolveUserHomeDir } from "../system/runtime-home";
+import { joinFromHome, resolveUserHomeDir } from "../system/runtime-home";
 import { IStackContext } from "../system/stack-context";
 import {
   ClackInstallerUi,
@@ -98,6 +107,149 @@ function resolveEmbeddingMode(
   return "medium";
 }
 
+async function cleanupManagedState(
+  resolved: ISetupWizardDeps,
+  stackComposeExists: boolean
+): Promise<ICheckResult> {
+  if (stackComposeExists) {
+    const cleanupStackContext: IStackContext = {
+      projectDir: getInstallerManagedStackDir(resolved.homeDir),
+      composeFilePath: getInstallerManagedComposePath(resolved.homeDir),
+    };
+    const cleanupResult = await downMemoryMeshStack(
+      resolved.runner,
+      cleanupStackContext,
+      true
+    );
+    if (!cleanupResult.ok) {
+      return cleanupResult;
+    }
+  }
+
+  await resolved.removePath(
+    joinFromHome(resolved.homeDir, ".memorymesh", "checkpoints")
+  );
+  await resolved.removePath(getInstallerHomeDir(resolved.homeDir));
+  return {
+    ok: true,
+    message: "Existing managed MemoryMesh state was removed.",
+  };
+}
+
+async function clearQdrantCollectionIfPresent(
+  resolved: ISetupWizardDeps,
+  collectionName: string
+): Promise<ICheckResult> {
+  const existingDimension = await detectQdrantCollectionDimension(
+    resolved.runner,
+    collectionName
+  );
+  if (existingDimension === null) {
+    return {
+      ok: true,
+      message: "No existing Qdrant collection state detected.",
+    };
+  }
+
+  const result = await resolved.runner.run("curl", [
+    "-fsS",
+    "-X",
+    "DELETE",
+    `http://localhost:6333/collections/${collectionName}`,
+  ]);
+  if (!result.success) {
+    return {
+      ok: false,
+      message: `Failed to clear Qdrant collection ${collectionName}.`,
+    };
+  }
+  return {
+    ok: true,
+    message: `Qdrant collection ${collectionName} cleared.`,
+  };
+}
+
+async function runCleanInstallResetPhase(
+  resolved: ISetupWizardDeps,
+  stackComposeExists: boolean
+): Promise<
+  | { ok: true; stackContext: IStackContext; stackMode: "release-image" | "local-dev-build" }
+  | { ok: false; message: string }
+> {
+  const cleanupStackContext: IStackContext = {
+    projectDir: getInstallerManagedStackDir(resolved.homeDir),
+    composeFilePath: getInstallerManagedComposePath(resolved.homeDir),
+  };
+  const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
+
+  const stopSpinner = resolved.spinnerFactory.start("Stopping existing stack...");
+  if (stackComposeExists) {
+    const stopResult = await downMemoryMeshStack(
+      resolved.runner,
+      cleanupStackContext,
+      false
+    );
+    if (!stopResult.ok) {
+      stopSpinner.fail("Could not stop existing stack");
+      return { ok: false, message: stopResult.message };
+    }
+  }
+  stopSpinner.succeed("Existing stack stopped");
+
+  const volumeSpinner = resolved.spinnerFactory.start("Removing containers and volumes...");
+  if (stackComposeExists) {
+    const downResult = await downMemoryMeshStack(
+      resolved.runner,
+      cleanupStackContext,
+      true
+    );
+    if (!downResult.ok) {
+      volumeSpinner.fail("Could not remove containers and volumes");
+      return { ok: false, message: downResult.message };
+    }
+  }
+  volumeSpinner.succeed("Containers and volumes removed");
+
+  const vectorSpinner = resolved.spinnerFactory.start("Clearing vector store...");
+  const clearCollectionResult = await clearQdrantCollectionIfPresent(
+    resolved,
+    collectionName
+  );
+  if (!clearCollectionResult.ok) {
+    vectorSpinner.fail("Could not clear vector store");
+    return { ok: false, message: clearCollectionResult.message };
+  }
+  vectorSpinner.succeed("Vector store cleared");
+
+  const stateSpinner = resolved.spinnerFactory.start("Removing installer-managed state...");
+  await resolved.removePath(
+    joinFromHome(resolved.homeDir, ".memorymesh", "checkpoints")
+  );
+  await resolved.removePath(getInstallerHomeDir(resolved.homeDir));
+  stateSpinner.succeed("Installer-managed state removed");
+
+  const prepareSpinner = resolved.spinnerFactory.start("Preparing fresh environment...");
+  try {
+    const managedStack = await ensureInstallerManagedStack(
+      resolved.homeDir,
+      resolved.fs,
+      { cwd: resolved.cwd, env: resolved.env }
+    );
+    prepareSpinner.succeed("Fresh environment prepared");
+    return {
+      ok: true,
+      stackContext: managedStack,
+      stackMode: managedStack.mode,
+    };
+  } catch (error) {
+    prepareSpinner.fail("Could not prepare fresh environment");
+    return {
+      ok: false,
+      message: String(error),
+    };
+  }
+}
+
 export async function runSetupWizard(
   deps: Partial<ISetupWizardDeps> = {}
 ): Promise<"completed" | "cancelled"> {
@@ -150,33 +302,20 @@ export async function runSetupWizard(
 
       if (action === "clean_install") {
         selectedCleanInstall = true;
-        const resetResult = await resetAndPrepareManagedStack({
-          runner: resolved.runner,
-          fs: resolved.fs,
-          homeDir: resolved.homeDir,
-          cwd: resolved.cwd,
-          stackComposeExists: dirtyState.signals.stackComposeExists,
-          removePath: resolved.removePath,
-          env: resolved.env,
-        });
-        if (!resetResult.cleanup.ok) {
-          return failWithMessage(
-            resolved.ui,
-            `Unable to reset previous managed stack: ${resetResult.cleanup.message}`
-          );
-        }
-        if (!("managedStack" in resetResult)) {
-          return failWithMessage(
-            resolved.ui,
-            "Unable to recreate installer-managed stack after clean install reset."
-          );
-        }
-        await resolved.ui.note(resetResult.cleanup.message);
-        await resolved.ui.note(
-          "Clean install removed previous state. Setup will continue and save your selected embedding as the new active state."
+        clearSessionSemanticEmbeddingAuthority();
+        const cleanupResult = await runCleanInstallResetPhase(
+          resolved,
+          dirtyState.signals.stackComposeExists
         );
-        stackContext = resetResult.managedStack;
-        stackMode = resetResult.managedStack.mode;
+        if (!cleanupResult.ok) {
+          return failWithMessage(
+            resolved.ui,
+            `Unable to reset previous managed stack: ${cleanupResult.message}`
+          );
+        }
+        stackContext = cleanupResult.stackContext;
+        stackMode = cleanupResult.stackMode;
+        await resolved.ui.note("Clean install removed previous state and prepared a fresh environment.");
         needsManagedStackCleanup = true;
         forceFreshEmbeddingSelection = true;
       } else {
@@ -208,19 +347,17 @@ export async function runSetupWizard(
       }
     }
 
+    const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
     let existingDimension: number | null = null;
     if (!forceFreshEmbeddingSelection) {
-      const persistedConfig = await readInstallConfig(resolved.homeDir, resolved.fs);
-      if (persistedConfig?.embeddingDimension) {
-        existingDimension = persistedConfig.embeddingDimension;
-      } else {
-        const collectionName = process.env.QDRANT_COLLECTION?.trim() || "memories";
-        const detectedDimension = await detectQdrantCollectionDimension(
-          resolved.runner,
-          collectionName
-        );
-        existingDimension = detectedDimension;
-      }
+      const semanticEmbedding = await resolveSemanticEmbeddingAuthority({
+        homeDir: resolved.homeDir,
+        fs: resolved.fs,
+        runner: resolved.runner,
+        collectionName,
+        preferSession: false,
+      });
+      existingDimension = semanticEmbedding?.embedding.embeddingDimension ?? null;
     }
 
     let selectedModel = await resolved.ui.selectEmbeddingModel({
@@ -247,27 +384,22 @@ export async function runSetupWizard(
           );
           await resolved.ui.note("Resetting MemoryMesh state...");
 
-          const resetResult = await resetAndPrepareManagedStack({
-            runner: resolved.runner,
-            fs: resolved.fs,
-            homeDir: resolved.homeDir,
-            cwd: resolved.cwd,
-            stackComposeExists: resolved.fs.exists(
-              getInstallerManagedComposePath(resolved.homeDir)
-            ),
-            removePath: resolved.removePath,
-            env: resolved.env,
-          });
-          if (!resetResult.cleanup.ok) {
-            throw new Error(`Unable to reset managed state for new embedding model: ${resetResult.cleanup.message}`);
-          }
-          if (!("managedStack" in resetResult)) {
-            throw new Error("Unable to recreate installer-managed stack after embedding reset.");
+          const cleanupResult = await cleanupManagedState(
+            resolved,
+            resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir))
+          );
+          if (!cleanupResult.ok) {
+            throw new Error(`Unable to reset managed state for new embedding model: ${cleanupResult.message}`);
           }
           needsManagedStackCleanup = true;
           await resolved.ui.note("Reset complete. Continuing setup with new embedding model.");
-          stackContext = resetResult.managedStack;
-          stackMode = resetResult.managedStack.mode;
+          const refreshedManagedStack = await ensureInstallerManagedStack(
+            resolved.homeDir,
+            resolved.fs,
+            { cwd: resolved.cwd, env: resolved.env }
+          );
+          stackContext = refreshedManagedStack;
+          stackMode = refreshedManagedStack.mode;
         },
       });
     } catch (error) {
@@ -292,7 +424,7 @@ export async function runSetupWizard(
     if (!stackContext) {
       return failWithMessage(
         resolved.ui,
-        "Unable to prepare installer-managed stack context."
+        "Unable to prepare installer-managed stack."
       );
     }
 
@@ -380,6 +512,17 @@ export async function runSetupWizard(
       healthSpinner.fail("Selected embedding model verification failed");
       return failWithMessage(resolved.ui, selectedModelCheck.message);
     }
+    const qdrantCollectionResult = await ensureQdrantCollectionDimension(
+      resolved.runner,
+      {
+        collectionName,
+        embeddingDimension: selectedDimension,
+      }
+    );
+    if (!qdrantCollectionResult.ok) {
+      healthSpinner.fail("Qdrant collection bootstrap failed");
+      return failWithMessage(resolved.ui, qdrantCollectionResult.message);
+    }
     healthSpinner.succeed("Post-setup verification passed");
 
     const shouldConfigureClaude = await resolved.ui.confirmClaudeIntegration();
@@ -462,25 +605,24 @@ export async function runSetupWizard(
       },
       resolved.fs
     );
+    setSessionSemanticEmbeddingAuthority({
+      embeddingMode: selectedMode,
+      embeddingModel: selectedModel,
+      embeddingDimension: selectedDimension,
+    });
 
     setupCompleted = true;
     await resolved.ui.outro("MemoryMesh setup complete.");
     return "completed";
   } finally {
     if (selectedCleanInstall && !setupCompleted) {
-      const rollbackReset = await resetMemoryMeshState({
-        runner: resolved.runner,
-        fs: resolved.fs,
-        homeDir: resolved.homeDir,
-        cwd: resolved.cwd,
-        stackComposeExists: resolved.fs.exists(
-          getInstallerManagedComposePath(resolved.homeDir)
-        ),
-        removePath: resolved.removePath,
-      });
-      if (!rollbackReset.ok) {
+      const rollbackCleanup = await cleanupManagedState(
+        resolved,
+        resolved.fs.exists(getInstallerManagedComposePath(resolved.homeDir))
+      );
+      if (!rollbackCleanup.ok) {
         await resolved.ui.note(
-          `Warning: temporary clean-install state could not be fully removed: ${rollbackReset.message}`
+          `Warning: temporary clean-install state could not be fully removed: ${rollbackCleanup.message}`
         );
       }
     }

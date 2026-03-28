@@ -1,5 +1,4 @@
 import { runSetupWizard } from "../installer/setup-wizard";
-import * as resetStateModule from "../installer/reset-state";
 import { IFileSystem } from "../system/filesystem";
 import { ICommandRunner } from "../system/command-runner";
 import { IInstallerUi, ISpinner, ISpinnerFactory } from "../ui/installer-ui";
@@ -7,8 +6,6 @@ import { ApprovalOptions, ApprovalResult } from "../ui/approval";
 
 const STACK_PATH = "/tmp/home/.memorymesh/stack/docker-compose.yml";
 const STACK_DIR = "/tmp/home/.memorymesh/stack";
-const REPO_STACK_PATH = "/tmp/workspace/docker-compose.yml";
-const REPO_STACK_DIR = "/tmp/workspace";
 
 class FakeRunner implements ICommandRunner {
   calls: string[] = [];
@@ -90,14 +87,34 @@ class FakeRunner implements ICommandRunner {
 }
 
 class FakeSpinner implements ISpinner {
-  succeed(): void {}
-  fail(): void {}
+  constructor(
+    private readonly onSucceed: (text: string) => void,
+    private readonly onFail: (text: string) => void
+  ) {}
+  succeed(text: string): void {
+    this.onSucceed(text);
+  }
+  fail(text: string): void {
+    this.onFail(text);
+  }
   stop(): void {}
 }
 
 class FakeSpinnerFactory implements ISpinnerFactory {
-  start(): ISpinner {
-    return new FakeSpinner();
+  started: string[] = [];
+  succeeded: string[] = [];
+  failed: string[] = [];
+
+  start(text: string): ISpinner {
+    this.started.push(text);
+    return new FakeSpinner(
+      (successText: string) => {
+        this.succeeded.push(successText);
+      },
+      (failureText: string) => {
+        this.failed.push(failureText);
+      }
+    );
   }
 }
 
@@ -175,9 +192,6 @@ function createBaseRunnerMap(): Record<string, { code: number; stdout?: string }
       stdout: '{"name":"memorymesh","status":"ok","transport":"http","mcp_endpoint":"/mcp"}HTTPSTATUS:200',
     },
     [`docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`]: {
-      code: 0,
-    },
-    [`docker compose -f ${REPO_STACK_PATH} --project-directory ${REPO_STACK_DIR} down --volumes --remove-orphans`]: {
       code: 0,
     },
   };
@@ -355,7 +369,7 @@ describe("setup wizard", () => {
     ).toBe(true);
   });
 
-  it("prefers persisted embedding dimension over live qdrant probe for setup labels", async () => {
+  it("falls back to persisted embedding dimension for setup labels when qdrant dimension is unavailable", async () => {
     const fs: IFileSystem = {
       exists: (path: string) =>
         path.endsWith("apps/server/Dockerfile") ||
@@ -379,20 +393,7 @@ describe("setup wizard", () => {
       write: async () => {},
     };
     const ui = new FakeUi(false);
-    const map = createBaseRunnerMap();
-    map["curl -fsS http://localhost:6333/collections/memories"] = {
-      code: 0,
-      stdout: JSON.stringify({
-        result: {
-          config: {
-            params: {
-              vectors: { size: 1024 },
-            },
-          },
-        },
-      }),
-    };
-    const runner = new FakeRunner(map);
+    const runner = new FakeRunner(createBaseRunnerMap());
 
     const code = await runSetupWizard({
       fs,
@@ -407,9 +408,6 @@ describe("setup wizard", () => {
 
     expect(code).toBe("completed");
     expect(ui.embeddingPromptExistingDimension).toBe(768);
-    expect(
-      runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
-    ).toBe(false);
   });
 
   it("keeps installer idempotent when MemoryMesh MCP entry already exists", async () => {
@@ -501,71 +499,6 @@ describe("setup wizard", () => {
       exists: (path: string) =>
         path.endsWith("apps/server/Dockerfile") ||
         path.endsWith("package.json") ||
-        path.endsWith("docker-compose.yml") ||
-        path.endsWith(".memorymesh") ||
-        path.endsWith("stack/docker-compose.yml"),
-      mkdir: async () => {},
-      read: async () => "{}",
-      write: async () => {},
-    };
-    const runner = new FakeRunner(createBaseRunnerMap());
-    const ui = new FakeUi(false, "nomic-embed-text", "clean_install");
-    const removedPaths: string[] = [];
-
-    const code = await runSetupWizard({
-      fs,
-      ui,
-      runner,
-      spinnerFactory: new FakeSpinnerFactory(),
-      cwd: "/tmp/workspace",
-      env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
-      homeDir: "/tmp/home",
-      platform: "darwin",
-      removePath: async (path: string) => {
-        removedPaths.push(path);
-      },
-    });
-
-    expect(code).toBe("completed");
-    expect(ui.dirtyPromptCalls).toBe(1);
-    expect(
-      runner.calls.includes(
-        `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`
-      )
-    ).toBe(true);
-    expect(
-      runner.calls.includes(
-        `docker compose -f ${REPO_STACK_PATH} --project-directory ${REPO_STACK_DIR} down --volumes --remove-orphans`
-      )
-    ).toBe(true);
-    expect(removedPaths).toContain("/tmp/home/.memorymesh");
-    expect(removedPaths).toContain("/tmp/home/.memorymesh/checkpoints");
-    expect(ui.embeddingPromptExistingDimension).toBeNull();
-    expect(
-      ui.notes.some((note) =>
-        note.includes("Clean install removed previous state. Setup will continue and save your selected embedding as the new active state.")
-      )
-    ).toBe(true);
-    expect(
-      runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
-    ).toBe(false);
-    expect(
-      runner.calls.indexOf(
-        `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`
-      )
-    ).toBeLessThan(
-      runner.calls.indexOf(
-        `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} up -d`
-      )
-    );
-  });
-
-  it("does not trigger immediate mismatch prompt after clean install even if stale qdrant is reachable", async () => {
-    const fs: IFileSystem = {
-      exists: (path: string) =>
-        path.endsWith("apps/server/Dockerfile") ||
-        path.endsWith("package.json") ||
-        path.endsWith("docker-compose.yml") ||
         path.endsWith(".memorymesh") ||
         path.endsWith("stack/docker-compose.yml"),
       mkdir: async () => {},
@@ -579,7 +512,9 @@ describe("setup wizard", () => {
         result: {
           config: {
             params: {
-              vectors: { size: 768 },
+              vectors: {
+                size: 768,
+              },
             },
           },
         },
@@ -587,24 +522,59 @@ describe("setup wizard", () => {
     };
     const runner = new FakeRunner(map, "mxbai-embed-large");
     const ui = new FakeUi(false, "mxbai-embed-large", "clean_install");
+    const removedPaths: string[] = [];
+    const spinnerFactory = new FakeSpinnerFactory();
 
     const code = await runSetupWizard({
       fs,
       ui,
       runner,
-      spinnerFactory: new FakeSpinnerFactory(),
+      spinnerFactory,
       cwd: "/tmp/workspace",
       env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
       homeDir: "/tmp/home",
       platform: "darwin",
-      removePath: async () => {},
+      removePath: async (path: string) => {
+        removedPaths.push(path);
+      },
     });
 
     expect(code).toBe("completed");
+    expect(ui.dirtyPromptCalls).toBe(1);
     expect(ui.approvalCalls).toBe(0);
+    expect(spinnerFactory.started).toEqual(
+      expect.arrayContaining([
+        "Stopping existing stack...",
+        "Removing containers and volumes...",
+        "Clearing vector store...",
+        "Removing installer-managed state...",
+        "Preparing fresh environment...",
+      ])
+    );
+    expect(
+      runner.calls.includes(
+        `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --volumes --remove-orphans`
+      )
+    ).toBe(true);
+    expect(
+      runner.calls.includes(
+        `docker compose -f ${STACK_PATH} --project-directory ${STACK_DIR} down --remove-orphans`
+      )
+    ).toBe(true);
+    expect(
+      runner.calls.includes("curl -fsS -X DELETE http://localhost:6333/collections/memories")
+    ).toBe(true);
+    expect(removedPaths).toContain("/tmp/home/.memorymesh");
+    expect(removedPaths).toContain("/tmp/home/.memorymesh/checkpoints");
+    expect(ui.embeddingPromptExistingDimension).toBeNull();
     expect(
       runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      runner.calls.includes(
+        'curl -fsS -X PUT http://localhost:6333/collections/memories -H Content-Type: application/json -d {"vectors":{"size":1024,"distance":"Cosine"}}'
+      )
+    ).toBe(true);
   });
 
   it("rolls back transient managed state when clean-install run is cancelled before completion", async () => {
@@ -612,7 +582,6 @@ describe("setup wizard", () => {
       exists: (path: string) =>
         path.endsWith("apps/server/Dockerfile") ||
         path.endsWith("package.json") ||
-        path.endsWith("docker-compose.yml") ||
         path.endsWith(".memorymesh") ||
         path.endsWith("stack/docker-compose.yml"),
       mkdir: async () => {},
@@ -652,13 +621,6 @@ describe("setup wizard", () => {
       removedPaths.filter((path) => path === "/tmp/home/.memorymesh/checkpoints").length
     ).toBeGreaterThanOrEqual(2);
     expect(ui.embeddingPromptExistingDimension).toBeNull();
-    expect(
-      runner.calls.filter(
-        (call) =>
-          call
-          === `docker compose -f ${REPO_STACK_PATH} --project-directory ${REPO_STACK_DIR} down --volumes --remove-orphans`
-      ).length
-    ).toBeGreaterThanOrEqual(2);
   });
 
   it("prompts for dirty state and supports reuse existing data", async () => {
@@ -880,96 +842,5 @@ describe("setup wizard", () => {
     expect(
       ui.notes.some((note) => note.includes("Setup cancelled. No changes were made."))
     ).toBe(true);
-  });
-
-  it("uses shared reset primitive for clean-install trigger", async () => {
-    const fs: IFileSystem = {
-      exists: (path: string) =>
-        path.endsWith("apps/server/Dockerfile")
-        || path.endsWith("package.json")
-        || path.endsWith("docker-compose.yml")
-        || path.endsWith(".memorymesh")
-        || path.endsWith("stack/docker-compose.yml"),
-      mkdir: async () => {},
-      read: async () => "{}",
-      write: async () => {},
-    };
-    const runner = new FakeRunner(createBaseRunnerMap());
-    const ui = new FakeUi(false, "nomic-embed-text", "clean_install");
-    const resetSpy = jest.spyOn(resetStateModule, "resetAndPrepareManagedStack").mockResolvedValue({
-      cleanup: { ok: true, message: "reset-ok" },
-      managedStack: { projectDir: STACK_DIR, composeFilePath: STACK_PATH, mode: "release-image" },
-    });
-
-    try {
-      const code = await runSetupWizard({
-        fs,
-        ui,
-        runner,
-        spinnerFactory: new FakeSpinnerFactory(),
-        cwd: "/tmp/workspace",
-        env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
-        homeDir: "/tmp/home",
-        platform: "darwin",
-        removePath: async () => {},
-      });
-
-      expect(code).toBe("completed");
-      expect(resetSpy).toHaveBeenCalledTimes(1);
-      expect(ui.notes).toContain("reset-ok");
-    } finally {
-      resetSpy.mockRestore();
-    }
-  });
-
-  it("uses shared reset primitive for embedding mismatch reset trigger", async () => {
-    const fs: IFileSystem = {
-      exists: (path: string) =>
-        path.endsWith("apps/server/Dockerfile")
-        || path.endsWith("package.json")
-        || path.endsWith(".memorymesh")
-        || path.endsWith("stack/docker-compose.yml"),
-      mkdir: async () => {},
-      read: async () => "{}",
-      write: async () => {},
-    };
-    const map = createBaseRunnerMap();
-    map["curl -fsS http://localhost:6333/collections/memories"] = {
-      code: 0,
-      stdout: JSON.stringify({
-        result: {
-          config: {
-            params: {
-              vectors: { size: 768 },
-            },
-          },
-        },
-      }),
-    };
-    const ui = new FakeUi(false, "mxbai-embed-large", "reuse_existing");
-    const resetSpy = jest.spyOn(resetStateModule, "resetAndPrepareManagedStack").mockResolvedValue({
-      cleanup: { ok: true, message: "reset-ok" },
-      managedStack: { projectDir: STACK_DIR, composeFilePath: STACK_PATH, mode: "release-image" },
-    });
-
-    try {
-      const code = await runSetupWizard({
-        fs,
-        ui,
-        runner: new FakeRunner(map, "mxbai-embed-large"),
-        spinnerFactory: new FakeSpinnerFactory(),
-        cwd: "/tmp/workspace",
-        env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
-        homeDir: "/tmp/home",
-        platform: "darwin",
-        removePath: async () => {},
-      });
-
-      expect(code).toBe("completed");
-      expect(ui.approvalCalls).toBe(1);
-      expect(resetSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      resetSpy.mockRestore();
-    }
   });
 });
