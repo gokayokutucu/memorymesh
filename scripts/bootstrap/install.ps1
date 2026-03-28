@@ -78,9 +78,10 @@ if (!(Test-Command npm)) {
 }
 
 Write-Host "Installing/updating MemoryMesh CLI globally..."
-npm install -g memorymesh
+npm install -g @okutucu/memorymesh
+Refresh-ProcessPath
 
-if (!(Get-Command memorymesh -ErrorAction SilentlyContinue)) {
+if (!(Test-Command memorymesh)) {
   Write-Error "memorymesh command not found after install"
   exit 1
 }
