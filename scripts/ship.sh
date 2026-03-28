@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MODE="${1:-}"
+VERSION_INPUT="${2:-}"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 VERSION_FILES=(
   package.json
@@ -13,8 +14,13 @@ VERSION_FILES=(
 )
 
 if [[ -z "$MODE" ]]; then
-  echo "Usage: ./scripts/ship.sh [ci|release]"
+  echo "Usage: ./scripts/ship.sh [ci|release <X.Y.Z|patch|minor|major>|<X.Y.Z|patch|minor|major>]"
   exit 1
+fi
+
+if [[ "$MODE" != "ci" && "$MODE" != "release" ]]; then
+  VERSION_INPUT="$MODE"
+  MODE="release"
 fi
 
 echo "Mode: $MODE"
@@ -44,6 +50,12 @@ fi
 # RELEASE MODE
 # -------------------------
 if [[ "$MODE" == "release" ]]; then
+  if [[ -z "$VERSION_INPUT" ]]; then
+    echo "❌ Missing version input."
+    echo "Usage: ./scripts/ship.sh release <X.Y.Z|patch|minor|major>"
+    exit 1
+  fi
+
   if [[ "$BRANCH" != "main" ]]; then
     echo "❌ Release can only be done from main branch"
     exit 1
@@ -62,10 +74,44 @@ if [[ "$MODE" == "release" ]]; then
     exit 1
   fi
 
-  # bump all workspace versions
-  npm version patch --workspaces
+  if [[ "$VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    VERSION="$VERSION_INPUT"
+    echo "Using manual version: $VERSION"
+  elif [[ "$VERSION_INPUT" == "patch" || "$VERSION_INPUT" == "minor" || "$VERSION_INPUT" == "major" ]]; then
+    CURRENT_VERSION="$(node -p "require('./packages/cli/package.json').version")"
+    VERSION="$(node -e '
+const current = process.argv[1];
+const bump = process.argv[2];
+const match = /^([0-9]+)\.([0-9]+)\.([0-9]+)$/.exec(current);
+if (!match) {
+  console.error(`Invalid current version: ${current}`);
+  process.exit(1);
+}
+const major = Number(match[1]);
+const minor = Number(match[2]);
+const patch = Number(match[3]);
+if (bump === "patch") {
+  process.stdout.write(`${major}.${minor}.${patch + 1}`);
+} else if (bump === "minor") {
+  process.stdout.write(`${major}.${minor + 1}.0`);
+} else if (bump === "major") {
+  process.stdout.write(`${major + 1}.0.0`);
+} else {
+  console.error(`Invalid bump mode: ${bump}`);
+  process.exit(1);
+}
+' "$CURRENT_VERSION" "$VERSION_INPUT")"
+    echo "Auto bump ($VERSION_INPUT): $CURRENT_VERSION -> $VERSION"
+  else
+    echo "❌ Invalid input: $VERSION_INPUT"
+    echo "Allowed: X.Y.Z | patch | minor | major"
+    exit 1
+  fi
 
-  VERSION=$(node -p "require('./packages/cli/package.json').version")
+  # bump all workspace versions to computed VERSION
+  npm version "$VERSION" --workspaces --no-git-tag-version
+
+  VERSION="$(node -p "require('./packages/cli/package.json').version")"
   TAG="v${VERSION}"
 
   echo "Version: $VERSION"
