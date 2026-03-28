@@ -108,8 +108,27 @@ if (bump === "patch") {
     exit 1
   fi
 
-  # bump all workspace versions to computed VERSION
-  npm version "$VERSION" --workspaces --no-git-tag-version
+  # deterministically update all intended package versions
+  node -e '
+const fs = require("fs");
+
+const version = process.argv[1];
+const files = process.argv.slice(2);
+for (const file of files) {
+  const json = JSON.parse(fs.readFileSync(file, "utf8"));
+  json.version = version;
+  fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
+  console.log(`Updated ${file} -> ${version}`);
+}
+' "$VERSION" \
+    package.json \
+    apps/server/package.json \
+    packages/core/package.json \
+    packages/runtime/package.json \
+    packages/cli/package.json
+
+  # regenerate package-lock deterministically after version updates
+  npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 
   VERSION="$(node -p "require('./packages/cli/package.json').version")"
   TAG="v${VERSION}"
