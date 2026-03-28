@@ -6,6 +6,12 @@ import {
   resolveInstallerManagedStack,
 } from "../installer/stack-packaging";
 import { IFileSystem } from "../system/filesystem";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const CLI_VERSION = JSON.parse(
+  readFileSync(resolve(__dirname, "..", "..", "package.json"), "utf8")
+) as { version: string };
 
 describe("stack packaging", () => {
   it("returns installer managed paths", () => {
@@ -39,9 +45,12 @@ describe("stack packaging", () => {
     const context = await ensureInstallerManagedStack("/tmp/home", fs, { cwd: "/tmp/workspace" });
     expect(context.projectDir).toBe("/tmp/home/.memorymesh/stack");
     expect(context.composeFilePath).toBe("/tmp/home/.memorymesh/stack/docker-compose.yml");
-    expect(context.mode).toBe("local-dev-build");
+    expect(context.mode).toBe("release-image");
     expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain("services:");
     expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
+      `image: "ghcr.io/gokayokutucu/memorymesh-server:v${CLI_VERSION.version}"`
+    );
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).not.toContain(
       "dockerfile: \"apps/server/Dockerfile\""
     );
     expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
@@ -80,5 +89,45 @@ describe("stack packaging", () => {
     });
 
     expect(mode.mode).toBe("release-image");
+  });
+
+  it("uses explicit MEMORYMESH_SERVER_IMAGE override in release-image mode", async () => {
+    const writes: Record<string, string> = {};
+    const fs: IFileSystem = {
+      exists: () => true,
+      mkdir: async () => {},
+      read: async () => "",
+      write: async (path: string, content: string) => {
+        writes[path] = content;
+      },
+    };
+
+    await ensureInstallerManagedStack("/tmp/home", fs, {
+      cwd: "/tmp/workspace",
+      env: {
+        MEMORYMESH_USE_LOCAL_BUILD: "false",
+        MEMORYMESH_SERVER_IMAGE: "ghcr.io/acme/memorymesh-server:v9.9.9",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(writes["/tmp/home/.memorymesh/stack/docker-compose.yml"]).toContain(
+      'image: "ghcr.io/acme/memorymesh-server:v9.9.9"'
+    );
+  });
+
+  it("uses local-dev-build mode only when explicitly enabled", () => {
+    const fs: IFileSystem = {
+      exists: () => true,
+      mkdir: async () => {},
+      read: async () => "",
+      write: async () => {},
+    };
+
+    const mode = resolveStackMode(fs, {
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "true" } as NodeJS.ProcessEnv,
+    });
+
+    expect(mode.mode).toBe("local-dev-build");
   });
 });

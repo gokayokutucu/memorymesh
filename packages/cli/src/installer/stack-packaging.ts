@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { IFileSystem, nodeFileSystem } from "../system/filesystem";
 import { IStackContext } from "../system/stack-context";
@@ -12,6 +13,7 @@ export interface IInstallerManagedStackContext extends IStackContext {
 interface IStackComposeOptions {
   mode: TStackMode;
   localBuildContext?: string;
+  releaseServerImage?: string;
 }
 
 interface IStackModeOptions {
@@ -62,7 +64,7 @@ function createMemoryMeshServiceContent(options: IStackComposeOptions): string {
   }
 
   return `  memorymesh:
-    image: "\${MEMORYMESH_SERVER_IMAGE:-ghcr.io/memorymesh/server:latest}"
+    image: "${options.releaseServerImage}"
     depends_on:
       qdrant:
         condition: service_started
@@ -92,6 +94,34 @@ function createMemoryMeshServiceContent(options: IStackComposeOptions): string {
       - MONGO_DB=memorymesh
       - NEO4J_URI=bolt://neo4j:7687
     restart: unless-stopped`;
+}
+
+function resolveCliPackageVersion(): string | null {
+  const packageJsonPath = resolve(__dirname, "..", "..", "package.json");
+  try {
+    const raw = readFileSync(packageJsonPath, "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    if (typeof parsed.version === "string" && /^[0-9]+\.[0-9]+\.[0-9]+$/.test(parsed.version)) {
+      return parsed.version;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveReleaseServerImage(env: NodeJS.ProcessEnv): string {
+  const explicitImage = env.MEMORYMESH_SERVER_IMAGE?.trim();
+  if (explicitImage) {
+    return explicitImage;
+  }
+
+  const cliVersion = resolveCliPackageVersion();
+  if (cliVersion) {
+    return `ghcr.io/gokayokutucu/memorymesh-server:v${cliVersion}`;
+  }
+
+  return "ghcr.io/gokayokutucu/memorymesh-server:latest";
 }
 
 function createStackComposeContent(options: IStackComposeOptions): string {
@@ -216,14 +246,6 @@ export function resolveStackMode(
     };
   }
 
-  const autoContext = resolveLocalBuildContext(cwd, fs);
-  if (autoContext) {
-    return {
-      mode: "local-dev-build",
-      localBuildContext: autoContext,
-    };
-  }
-
   return { mode: "release-image" };
 }
 
@@ -248,8 +270,18 @@ export async function ensureInstallerManagedStack(
   const composeFilePath = getInstallerManagedComposePath(homeDir);
   const mode = resolveStackMode(fs, options);
 
+  const env = options.env ?? process.env;
+  const releaseServerImage =
+    mode.mode === "release-image" ? resolveReleaseServerImage(env) : undefined;
+
   await fs.mkdir(stackDir);
-  await fs.write(composeFilePath, createStackComposeContent(mode));
+  await fs.write(
+    composeFilePath,
+    createStackComposeContent({
+      ...mode,
+      releaseServerImage,
+    })
+  );
 
   return {
     projectDir: stackDir,
