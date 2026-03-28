@@ -15,7 +15,7 @@ import {
 } from "./runtime-config";
 import { detectQdrantCollectionDimension } from "./qdrant-dimension";
 import { inspectDirtySetupState } from "./dirty-state";
-import { resetMemoryMeshState } from "./reset-state";
+import { resetAndPrepareManagedStack, resetMemoryMeshState } from "./reset-state";
 import {
   ensureInstallerManagedStack,
   getInstallerManagedComposePath,
@@ -108,7 +108,7 @@ export async function runSetupWizard(
   await resolved.ui.intro("MemoryMesh first-time setup");
 
   try {
-    let stackContext: IStackContext;
+    let stackContext: IStackContext | null = null;
     let stackMode: "release-image" | "local-dev-build" = "release-image";
     let needsManagedStackCleanup = false;
     let forceFreshEmbeddingSelection = false;
@@ -150,24 +150,33 @@ export async function runSetupWizard(
 
       if (action === "clean_install") {
         selectedCleanInstall = true;
-        const cleanupResult = await resetMemoryMeshState({
+        const resetResult = await resetAndPrepareManagedStack({
           runner: resolved.runner,
           fs: resolved.fs,
           homeDir: resolved.homeDir,
           cwd: resolved.cwd,
           stackComposeExists: dirtyState.signals.stackComposeExists,
           removePath: resolved.removePath,
+          env: resolved.env,
         });
-        if (!cleanupResult.ok) {
+        if (!resetResult.cleanup.ok) {
           return failWithMessage(
             resolved.ui,
-            `Unable to reset previous managed stack: ${cleanupResult.message}`
+            `Unable to reset previous managed stack: ${resetResult.cleanup.message}`
           );
         }
-        await resolved.ui.note(cleanupResult.message);
+        if (!("managedStack" in resetResult)) {
+          return failWithMessage(
+            resolved.ui,
+            "Unable to recreate installer-managed stack after clean install reset."
+          );
+        }
+        await resolved.ui.note(resetResult.cleanup.message);
         await resolved.ui.note(
           "Clean install removed previous state. Setup will continue and save your selected embedding as the new active state."
         );
+        stackContext = resetResult.managedStack;
+        stackMode = resetResult.managedStack.mode;
         needsManagedStackCleanup = true;
         forceFreshEmbeddingSelection = true;
       } else {
@@ -175,26 +184,28 @@ export async function runSetupWizard(
       }
     }
 
-    try {
-      const managedStack = await ensureInstallerManagedStack(
-        resolved.homeDir,
-        resolved.fs,
-        { cwd: resolved.cwd, env: resolved.env }
-      );
-      stackContext = managedStack;
-      stackMode = managedStack.mode;
-    } catch (error) {
-      if (needsManagedStackCleanup) {
+    if (!stackContext) {
+      try {
+        const managedStack = await ensureInstallerManagedStack(
+          resolved.homeDir,
+          resolved.fs,
+          { cwd: resolved.cwd, env: resolved.env }
+        );
+        stackContext = managedStack;
+        stackMode = managedStack.mode;
+      } catch (error) {
+        if (needsManagedStackCleanup) {
+          return failWithMessage(
+            resolved.ui,
+            `Unable to recreate installer-managed stack after cleanup: ${String(error)}`
+          );
+        }
+
         return failWithMessage(
           resolved.ui,
-          `Unable to recreate installer-managed stack after cleanup: ${String(error)}`
+          `Unable to prepare installer-managed stack: ${String(error)}`
         );
       }
-
-      return failWithMessage(
-        resolved.ui,
-        `Unable to prepare installer-managed stack: ${String(error)}`
-      );
     }
 
     let existingDimension: number | null = null;
@@ -236,7 +247,7 @@ export async function runSetupWizard(
           );
           await resolved.ui.note("Resetting MemoryMesh state...");
 
-          const cleanupResult = await resetMemoryMeshState({
+          const resetResult = await resetAndPrepareManagedStack({
             runner: resolved.runner,
             fs: resolved.fs,
             homeDir: resolved.homeDir,
@@ -245,19 +256,18 @@ export async function runSetupWizard(
               getInstallerManagedComposePath(resolved.homeDir)
             ),
             removePath: resolved.removePath,
+            env: resolved.env,
           });
-          if (!cleanupResult.ok) {
-            throw new Error(`Unable to reset managed state for new embedding model: ${cleanupResult.message}`);
+          if (!resetResult.cleanup.ok) {
+            throw new Error(`Unable to reset managed state for new embedding model: ${resetResult.cleanup.message}`);
+          }
+          if (!("managedStack" in resetResult)) {
+            throw new Error("Unable to recreate installer-managed stack after embedding reset.");
           }
           needsManagedStackCleanup = true;
           await resolved.ui.note("Reset complete. Continuing setup with new embedding model.");
-          const refreshedManagedStack = await ensureInstallerManagedStack(
-            resolved.homeDir,
-            resolved.fs,
-            { cwd: resolved.cwd, env: resolved.env }
-          );
-          stackContext = refreshedManagedStack;
-          stackMode = refreshedManagedStack.mode;
+          stackContext = resetResult.managedStack;
+          stackMode = resetResult.managedStack.mode;
         },
       });
     } catch (error) {
@@ -277,6 +287,12 @@ export async function runSetupWizard(
       return failWithMessage(
         resolved.ui,
         "Unable to recreate installer-managed stack after embedding reset."
+      );
+    }
+    if (!stackContext) {
+      return failWithMessage(
+        resolved.ui,
+        "Unable to prepare installer-managed stack context."
       );
     }
 
@@ -452,7 +468,7 @@ export async function runSetupWizard(
     return "completed";
   } finally {
     if (selectedCleanInstall && !setupCompleted) {
-      const rollbackCleanup = await resetMemoryMeshState({
+      const rollbackReset = await resetMemoryMeshState({
         runner: resolved.runner,
         fs: resolved.fs,
         homeDir: resolved.homeDir,
@@ -462,9 +478,9 @@ export async function runSetupWizard(
         ),
         removePath: resolved.removePath,
       });
-      if (!rollbackCleanup.ok) {
+      if (!rollbackReset.ok) {
         await resolved.ui.note(
-          `Warning: temporary clean-install state could not be fully removed: ${rollbackCleanup.message}`
+          `Warning: temporary clean-install state could not be fully removed: ${rollbackReset.message}`
         );
       }
     }

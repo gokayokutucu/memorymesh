@@ -560,6 +560,53 @@ describe("setup wizard", () => {
     );
   });
 
+  it("does not trigger immediate mismatch prompt after clean install even if stale qdrant is reachable", async () => {
+    const fs: IFileSystem = {
+      exists: (path: string) =>
+        path.endsWith("apps/server/Dockerfile") ||
+        path.endsWith("package.json") ||
+        path.endsWith("docker-compose.yml") ||
+        path.endsWith(".memorymesh") ||
+        path.endsWith("stack/docker-compose.yml"),
+      mkdir: async () => {},
+      read: async () => "{}",
+      write: async () => {},
+    };
+    const map = createBaseRunnerMap();
+    map["curl -fsS http://localhost:6333/collections/memories"] = {
+      code: 0,
+      stdout: JSON.stringify({
+        result: {
+          config: {
+            params: {
+              vectors: { size: 768 },
+            },
+          },
+        },
+      }),
+    };
+    const runner = new FakeRunner(map, "mxbai-embed-large");
+    const ui = new FakeUi(false, "mxbai-embed-large", "clean_install");
+
+    const code = await runSetupWizard({
+      fs,
+      ui,
+      runner,
+      spinnerFactory: new FakeSpinnerFactory(),
+      cwd: "/tmp/workspace",
+      env: { MEMORYMESH_USE_LOCAL_BUILD: "false" },
+      homeDir: "/tmp/home",
+      platform: "darwin",
+      removePath: async () => {},
+    });
+
+    expect(code).toBe("completed");
+    expect(ui.approvalCalls).toBe(0);
+    expect(
+      runner.calls.includes("curl -fsS http://localhost:6333/collections/memories")
+    ).toBe(false);
+  });
+
   it("rolls back transient managed state when clean-install run is cancelled before completion", async () => {
     const fs: IFileSystem = {
       exists: (path: string) =>
@@ -849,9 +896,9 @@ describe("setup wizard", () => {
     };
     const runner = new FakeRunner(createBaseRunnerMap());
     const ui = new FakeUi(false, "nomic-embed-text", "clean_install");
-    const resetSpy = jest.spyOn(resetStateModule, "resetMemoryMeshState").mockResolvedValue({
-      ok: true,
-      message: "reset-ok",
+    const resetSpy = jest.spyOn(resetStateModule, "resetAndPrepareManagedStack").mockResolvedValue({
+      cleanup: { ok: true, message: "reset-ok" },
+      managedStack: { projectDir: STACK_DIR, composeFilePath: STACK_PATH, mode: "release-image" },
     });
 
     try {
@@ -900,9 +947,9 @@ describe("setup wizard", () => {
       }),
     };
     const ui = new FakeUi(false, "mxbai-embed-large", "reuse_existing");
-    const resetSpy = jest.spyOn(resetStateModule, "resetMemoryMeshState").mockResolvedValue({
-      ok: true,
-      message: "reset-ok",
+    const resetSpy = jest.spyOn(resetStateModule, "resetAndPrepareManagedStack").mockResolvedValue({
+      cleanup: { ok: true, message: "reset-ok" },
+      managedStack: { projectDir: STACK_DIR, composeFilePath: STACK_PATH, mode: "release-image" },
     });
 
     try {
