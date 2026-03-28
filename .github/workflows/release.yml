@@ -172,6 +172,7 @@ jobs:
           TAG="${{ needs.validate_release.outputs.release_tag }}"
           VERSION="${TAG#v}"
           echo "version=${IMAGE_NAME}:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "vversion=${IMAGE_NAME}:v${VERSION}" >> "$GITHUB_OUTPUT"
           echo "latest=${IMAGE_NAME}:latest" >> "$GITHUB_OUTPUT"
 
       - name: Build and push server image
@@ -180,6 +181,8 @@ jobs:
           context: .
           file: apps/server/Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ${{ steps.tags.outputs.version }}
+            ${{ steps.tags.outputs.vversion }}
             ${{ steps.tags.outputs.latest }}
