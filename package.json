@@ -11,5 +11,5 @@
     "docker:build": "docker compose build",
     "release:check": "npm run -w @okutucu/memorymesh pack:check && npm run -w @okutucu/memorymesh publish:check"
   },
-  "version": "0.2.2"
+  "version": "0.2.3"
 }
