@@ -220,6 +220,23 @@ Do not try to fix mismatch by manually exporting embedding environment variables
 11. self-contained tarball/global install reports `EEXIST` binary conflict
 - Remove conflicting global binary/package, or reinstall with a clean prefix, then run `npm install -g @okutucu/memorymesh`
 
+## MemoryMesh Agent Usage
+
+To enable MemoryMesh memory behavior in your AI agent, you must manually configure memory rules:
+
+1. Go to:
+   `Settings > Capabilities > Memory > Manage Memory`
+2. Add TWO separate memory entries (this will use 2 memory slots out of the available slots, typically ~20).
+3. Paste each of the following snippets into its own memory entry exactly as-is:
+
+```text
+If MemoryMesh tools are available, use save_memory when: a decision is made (technical, personal, or workflow-related), something is learned or a bug is debugged, a preference or working style is clarified, or an important output is produced (code, email, document, plan, summary). Also save when the user says "remember this". Format every entry as: [INPUT] the user's request or question / [OUTPUT] the response, result, or artifact produced. No topic restriction.
+```
+
+```text
+If MemoryMesh tools are available, use search_memory proactively before generating a response if the topic might have relevant past context. Always search when: a new conversation starts and context feels missing, the user references something from a previous session ("last time", "we decided", "remember when"), or the current topic overlaps with decisions or outputs that may have been saved before. Trust the results — if a memory is retrieved, factor it into your answer.
+```
+
 ## Development / Monorepo Notes
 
 Repository layout:
