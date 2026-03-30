@@ -4,22 +4,7 @@
 
 MemoryMesh is a local-first memory stack for AI workflows. It ships a CLI (`memorymesh`) that installs and manages a Docker-based runtime (MemoryMesh API, MongoDB, Neo4j, Qdrant, Ollama), plus CLI flows for setup, diagnostics, lifecycle, GPT archive import, and document import.
 
-## Install
-
-Global npm install:
-
-```bash
-npm install -g @okutucu/memorymesh
-memorymesh
-```
-
-Notes:
-
-- Package name is `@okutucu/memorymesh`
-- First run launches interactive setup if `~/.memorymesh/config.json` is missing
-- Published tarball includes required internal runtime modules for standalone install
-
-## Bootstrap Install
+## Install (Recommended)
 
 macOS / Linux:
 
@@ -33,12 +18,25 @@ Windows (PowerShell):
 irm https://github.com/gokayokutucu/memorymesh/releases/latest/download/install.ps1 | iex
 ```
 
-Bootstrap behavior:
+Release-based installer behavior:
 
 - Installs/updates the `memorymesh` CLI globally
 - Launches `memorymesh` after install
 - Attempts best-effort prerequisite installation where supported
 - Prints explicit platform guidance when prerequisites cannot be auto-installed
+
+Alternative manual npm install:
+
+```bash
+npm install -g @okutucu/memorymesh
+memorymesh
+```
+
+Notes:
+
+- Package name is `@okutucu/memorymesh`
+- First run launches interactive setup if `~/.memorymesh/config.json` is missing
+- Published tarball includes required internal runtime modules for standalone install
 
 Prerequisites (current phase):
 
@@ -49,6 +47,7 @@ Prerequisites (current phase):
 Important:
 
 - Bootstrap scripts do not guarantee universal automatic prerequisite installation
+- Release assets `install.sh` and `install.ps1` are produced from `scripts/bootstrap/`
 
 ## Runtime Modes
 
@@ -239,8 +238,14 @@ npm run build -w @okutucu/memorymesh
 npm test -w @okutucu/memorymesh
 ```
 
+Developer source setup script (repo/dev workflow, not end-user install):
+
+```bash
+./scripts/dev/install-dev.sh
+```
+
 Release/distribution notes (current state):
 
 - npm package target: `@okutucu/memorymesh`
-- bootstrap scripts are published as release assets (`install.sh`, `install.ps1`)
+- bootstrap installer assets for end users are published as release assets (`install.sh`, `install.ps1`) from `scripts/bootstrap/`
 - release automation is scaffolded; treat it as evolving, not fully hands-off
