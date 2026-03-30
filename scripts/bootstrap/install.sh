@@ -12,6 +12,17 @@ command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
 
+launch_memorymesh_interactive() {
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    echo "Starting MemoryMesh..."
+    memorymesh </dev/tty >/dev/tty 2>/dev/tty
+    return
+  fi
+
+  echo "MemoryMesh CLI installed successfully."
+  echo "Run 'memorymesh' to start setup."
+}
+
 run_with_optional_sudo() {
   if [ "${EUID:-$(id -u)}" -eq 0 ]; then
     "$@"
@@ -129,5 +140,4 @@ if ! command -v memorymesh >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Starting MemoryMesh..."
-memorymesh
+launch_memorymesh_interactive
